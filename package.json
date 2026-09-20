@@ -1,0 +1,64 @@
+{
+  "name": "mcp-server-petkit",
+  "version": "0.1.0",
+  "description": "MCP server for the PetKit cloud API (Fresh Element Solo feeder)",
+  "keywords": ["mcp", "petkit", "feeder", "pet"],
+  "author": "Dirk-Jan Faber",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dirkjanfaber/mcp-server-petkit.git"
+  },
+  "homepage": "https://github.com/dirkjanfaber/mcp-server-petkit#readme",
+  "bugs": {
+    "url": "https://github.com/dirkjanfaber/mcp-server-petkit/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "dist"
+  ],
+  "bin": {
+    "mcp-server-petkit": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest",
+    "test:watch": "NODE_OPTIONS=--experimental-vm-modules jest --watch",
+    "test:coverage": "NODE_OPTIONS=--experimental-vm-modules jest --coverage",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "axios": "^1.20.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.0.0",
+    "axios-mock-adapter": "^2.1.0",
+    "jest": "^30.5.2",
+    "ts-jest": "^29.4.12",
+    "typescript": "^5.9.3"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "extensionsToTreatAsEsm": [".ts"],
+    "testEnvironment": "node",
+    "transform": {
+      "^.+\\.tsx?$": ["ts-jest", { "useESM": true }]
+    },
+    "moduleNameMapper": {
+      "^(\\.{1,2}/.*)\\.js$": "$1"
+    },
+    "roots": [
+      "<rootDir>/src/__tests__"
+    ],
+    "collectCoverageFrom": [
+      "src/**/*.ts",
+      "!src/**/*.d.ts"
+    ]
+  }
+}
