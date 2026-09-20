@@ -30,6 +30,19 @@ export interface Feeder {
     batteryStatus: number;
     desiccantLeftDays: number;
     feeding: number;
+    // Tracked per device, not per cat - PetKit has no way to know which cat actually
+    // ate from which bowl. `feedTimes` is keyed by seconds-since-midnight for each
+    // configured schedule slot (e.g. "63000" = 17:30); whether the count resets daily
+    // or accumulates since the schedule was set up is unconfirmed - observed counts
+    // greater than 1 on slots that should only fire once/day suggest the latter.
+    feedState: {
+      realAmountTotal: number;
+      planAmountTotal: number;
+      addAmountTotal: number;
+      planRealAmountTotal: number;
+      times: number;
+      feedTimes: Record<string, number>;
+    };
   };
 }
 

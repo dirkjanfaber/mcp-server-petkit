@@ -10,13 +10,17 @@ MCP (Model Context Protocol) server for the [PetKit](https://www.petkit.com) clo
 
 | Tool | Description |
 |---|---|
-| `list_feeders` | List all Fresh Element Solo feeders and their live state (food/battery/desiccant status, lock/light/sound settings) |
+| `list_feeders` | List all Fresh Element Solo feeders and their live state (food/battery/desiccant status, lock/light/sound settings, today's feed totals) |
 | `feed_now` | Dispense food immediately |
 | `update_feeder_setting` | Change a numeric setting (child lock, indicator light, dispense tone, shortage alarm, ...) |
 
 ### Feed amounts
 
 The D4 only accepts these five portion sizes: `10`, `20`, `30`, `40`, `50`.
+
+### Feed totals are per device, not per cat
+
+`list_feeders`' `fedToday`/`fedTodayScheduled`/`fedTodayExtra`/`fedTodayPlanned`/`dispensesToday`/`feedTimesToday` fields reflect what each *physical feeder* dispensed - PetKit has no way to attribute a dispense to a specific cat. If your cats share or steal from each other's bowls, these numbers won't tell you what any one cat actually ate.
 
 ### Common setting keys
 

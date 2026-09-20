@@ -11,7 +11,13 @@ function makeFeeder(overrides: Partial<Feeder> = {}): Feeder {
     firmware: '1.267',
     desc: 'Next Dispense: 17:30',
     settings: { manualLock: 0, lightMode: 1, feedSound: 1, foodWarn: 0 },
-    state: { food: 1, batteryPower: 0, batteryStatus: 0, desiccantLeftDays: 27, feeding: 0 },
+    state: {
+      food: 1, batteryPower: 0, batteryStatus: 0, desiccantLeftDays: 27, feeding: 0,
+      feedState: {
+        realAmountTotal: 50, planAmountTotal: 60, addAmountTotal: 10, planRealAmountTotal: 40,
+        times: 3, feedTimes: { '24300': 1, '43200': 1, '63000': 3, '82800': 3 },
+      },
+    },
     ...overrides,
   };
 }
@@ -51,7 +57,13 @@ describe('list_feeders', () => {
       getFeeders: jest.fn().mockResolvedValue([
         makeFeeder({
           settings: { manualLock: 1, lightMode: 1, feedSound: 0, foodWarn: 1 },
-          state: { food: 0, batteryPower: 0, batteryStatus: 0, desiccantLeftDays: 2, feeding: 1 },
+          state: {
+            food: 0, batteryPower: 0, batteryStatus: 0, desiccantLeftDays: 2, feeding: 1,
+            feedState: {
+              realAmountTotal: 20, planAmountTotal: 60, addAmountTotal: 20, planRealAmountTotal: 0,
+              times: 1, feedTimes: { '24300': 1 },
+            },
+          },
         }),
       ]),
     });
@@ -70,6 +82,21 @@ describe('list_feeders', () => {
     const api = makeApi();
     const result = await handleToolCall('list_feeders', {}, api);
     expect(JSON.parse(textOf(result))).toEqual([]);
+  });
+
+  it('surfaces per-device feed totals for today', async () => {
+    const api = makeApi({ getFeeders: jest.fn().mockResolvedValue([makeFeeder()]) });
+    const result = await handleToolCall('list_feeders', {}, api);
+    const parsed = JSON.parse(textOf(result));
+
+    expect(parsed[0]).toMatchObject({
+      fedToday: 50,
+      fedTodayScheduled: 40,
+      fedTodayExtra: 10,
+      fedTodayPlanned: 60,
+      dispensesToday: 3,
+      feedTimesToday: { '24300': 1, '43200': 1, '63000': 3, '82800': 3 },
+    });
   });
 });
 

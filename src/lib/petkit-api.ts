@@ -232,6 +232,14 @@ export class PetkitCloudAPI implements PetkitBackend {
               batteryStatus: d.state.batteryStatus,
               desiccantLeftDays: d.state.desiccantLeftDays,
               feeding: d.state.feeding,
+              feedState: {
+                realAmountTotal: d.state.feedState.realAmountTotal,
+                planAmountTotal: d.state.feedState.planAmountTotal,
+                addAmountTotal: d.state.feedState.addAmountTotal,
+                planRealAmountTotal: d.state.feedState.planRealAmountTotal,
+                times: d.state.feedState.times,
+                feedTimes: d.state.feedState.feedTimes,
+              },
             },
           });
         }

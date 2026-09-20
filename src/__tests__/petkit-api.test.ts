@@ -47,7 +47,13 @@ const MOCK_FEEDER_DETAIL = {
     firmware: '1.267',
     desc: 'Next Dispense: 17:30',
     settings: { manualLock: 0, lightMode: 1, feedSound: 1, foodWarn: 0 },
-    state: { food: 1, batteryPower: 0, batteryStatus: 0, desiccantLeftDays: 27, feeding: 0 },
+    state: {
+      food: 1, batteryPower: 0, batteryStatus: 0, desiccantLeftDays: 27, feeding: 0,
+      feedState: {
+        realAmountTotal: 50, planAmountTotal: 60, addAmountTotal: 10, planRealAmountTotal: 40,
+        times: 3, feedTimes: { '24300': 1, '43200': 1, '63000': 3, '82800': 3 },
+      },
+    },
   },
 };
 
@@ -155,7 +161,13 @@ describe('PetkitCloudAPI', () => {
         firmware: '1.267',
         desc: 'Next Dispense: 17:30',
         settings: { manualLock: 0, lightMode: 1, feedSound: 1, foodWarn: 0 },
-        state: { food: 1, batteryPower: 0, batteryStatus: 0, desiccantLeftDays: 27, feeding: 0 },
+        state: {
+          food: 1, batteryPower: 0, batteryStatus: 0, desiccantLeftDays: 27, feeding: 0,
+          feedState: {
+            realAmountTotal: 50, planAmountTotal: 60, addAmountTotal: 10, planRealAmountTotal: 40,
+            times: 3, feedTimes: { '24300': 1, '43200': 1, '63000': 3, '82800': 3 },
+          },
+        },
       }]);
       const detailCall = mock.history.post.find(req => req.url === `${US_BASE_URL}d4/device_detail`);
       expect(new URLSearchParams(detailCall!.data as string).get('id')).toBe('100');

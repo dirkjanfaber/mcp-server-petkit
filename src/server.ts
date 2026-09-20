@@ -32,7 +32,7 @@ const UpdateFeederSettingArgs = z.object({
 export const TOOLS = [
   {
     name: 'list_feeders',
-    description: 'List all PetKit Fresh Element Solo (D4) feeders and their live state (food/battery/desiccant status, lock/light/sound settings)',
+    description: "List all PetKit Fresh Element Solo (D4) feeders and their live state (food/battery/desiccant status, lock/light/sound settings, and today's feed totals). Feed totals are tracked per device, not per cat - if multiple cats share or steal from each other's feeders, these numbers reflect what each physical feeder dispensed, not what any one cat ate.",
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -82,6 +82,13 @@ function summarizeFeeder(f: Feeder) {
     batteryStatus: f.state.batteryStatus,
     desiccantLeftDays: f.state.desiccantLeftDays,
     feeding: f.state.feeding === 1,
+    // Per device, not per cat - PetKit can't attribute a dispense to a specific cat.
+    fedToday: f.state.feedState.realAmountTotal,
+    fedTodayScheduled: f.state.feedState.planRealAmountTotal,
+    fedTodayExtra: f.state.feedState.addAmountTotal,
+    fedTodayPlanned: f.state.feedState.planAmountTotal,
+    dispensesToday: f.state.feedState.times,
+    feedTimesToday: f.state.feedState.feedTimes,
   };
 }
 
