@@ -1,7 +1,7 @@
 import { jest } from '@jest/globals';
 import axios from 'axios';
 import MockAdapter from 'axios-mock-adapter';
-import { PetkitCloudAPI, localDayCompact, timezoneOffsetHours } from '../lib/petkit-api';
+import { PetkitCloudAPI, localDayCompact, localWeekdayRepeats, timezoneOffsetHours } from '../lib/petkit-api';
 
 const REGION_SERVER_URL = 'https://passport.petkt.com/6/account/regionservers';
 const US_BASE_URL = 'https://api.petkt.com/latest/';
@@ -55,8 +55,33 @@ const MOCK_FEEDER_DETAIL = {
         times: 3, feedTimes: { '24300': 1, '43200': 1, '63000': 3, '82800': 3 },
       },
     },
+    // Feeding plan: one entry per weekday, `repeats` 1 = Sunday ... 7 = Saturday
+    // (confirmed live: a Thursday-only meal showed up under repeats 5).
+    // `amount` is in the same units as saveDailyFeed (1/10 cup in the app = 10).
+    multiFeedItem: {
+      isExecuted: 1,
+      feedDailyList: [
+        {
+          suspended: 0,
+          repeats: 1,
+          items: [
+            { id: '24300', time: 24300, amount: 20, name: 'Breakfast' },
+            { id: '63000', time: 63000, amount: 10, name: 'Dinner' },
+          ],
+        },
+        {
+          suspended: 1,
+          repeats: 2,
+          items: [{ id: '43200', time: 43200, amount: 30, name: 'Lunch' }],
+        },
+        { suspended: 0, repeats: 3 },
+      ],
+    },
   },
 };
+
+// A Monday - repeats 2 in the fixture plan, which is suspended.
+const MONDAY_NOON_UTC = new Date('2026-09-28T12:00:00Z');
 
 function credentials() {
   return { email: 'test@example.com', password: 'secret', region: 'United States' };
@@ -68,7 +93,7 @@ describe('PetkitCloudAPI', () => {
 
   beforeEach(() => {
     mock = new MockAdapter(axios);
-    api = new PetkitCloudAPI(credentials(), { retryDelays: [0, 0, 0] });
+    api = new PetkitCloudAPI(credentials(), { retryDelays: [0, 0, 0], now: () => MONDAY_NOON_UTC });
   });
 
   afterEach(() => {
@@ -80,6 +105,21 @@ describe('PetkitCloudAPI', () => {
     mock.onPost(`${US_BASE_URL}user/login`).reply(200, MOCK_LOGIN_RESPONSE);
     mock.onPost(`${US_BASE_URL}group/family/list`).reply(200, MOCK_GROUP_LIST);
   }
+
+  // --- localWeekdayRepeats ---
+
+  describe('localWeekdayRepeats()', () => {
+    it('numbers the week from Sunday = 1, the way feedDailyList.repeats does', () => {
+      expect(localWeekdayRepeats('UTC', new Date('2026-09-27T12:00:00Z'))).toBe(1); // Sunday
+      expect(localWeekdayRepeats('UTC', new Date('2026-10-01T12:00:00Z'))).toBe(5); // Thursday
+      expect(localWeekdayRepeats('UTC', new Date('2026-10-03T12:00:00Z'))).toBe(7); // Saturday
+    });
+
+    it('uses the weekday in the given timezone, not in UTC', () => {
+      // Saturday 23:30 UTC is already Sunday 01:30 in Amsterdam.
+      expect(localWeekdayRepeats('Europe/Amsterdam', new Date('2026-10-03T23:30:00Z'))).toBe(1);
+    });
+  });
 
   // --- timezoneOffsetHours ---
 
@@ -184,9 +224,106 @@ describe('PetkitCloudAPI', () => {
             times: 3, feedTimes: { '24300': 1, '43200': 1, '63000': 3, '82800': 3 },
           },
         },
+        feedPlan: [
+          {
+            repeats: 1,
+            suspended: 0,
+            meals: [
+              { time: 24300, amount: 20, name: 'Breakfast' },
+              { time: 63000, amount: 10, name: 'Dinner' },
+            ],
+          },
+          {
+            repeats: 2,
+            suspended: 1,
+            meals: [{ time: 43200, amount: 30, name: 'Lunch' }],
+          },
+          { repeats: 3, suspended: 0, meals: [] },
+        ],
+        feedPlanToday: [],
       }]);
       const detailCall = mock.history.post.find(req => req.url === `${US_BASE_URL}d4/device_detail`);
       expect(new URLSearchParams(detailCall!.data as string).get('id')).toBe('100');
+    });
+
+    it('returns an empty feed plan when the feeder has none configured', async () => {
+      mockAuthFlow();
+      mock.onPost(`${US_BASE_URL}discovery/device_roster_v2`).reply(200, MOCK_DEVICE_ROSTER);
+      const { multiFeedItem, ...detailWithoutPlan } = MOCK_FEEDER_DETAIL.result;
+      mock.onPost(`${US_BASE_URL}d4/device_detail`).reply(200, { result: detailWithoutPlan });
+
+      const feeders = await api.getFeeders();
+
+      expect(feeders[0].feedPlan).toEqual([]);
+      expect(feeders[0].feedPlanToday).toEqual([]);
+    });
+
+    it('uses the real clock when none is injected', async () => {
+      api = new PetkitCloudAPI({ ...credentials(), timezone: 'UTC' }, { retryDelays: [0, 0, 0] });
+      mockAuthFlow();
+      mock.onPost(`${US_BASE_URL}discovery/device_roster_v2`).reply(200, MOCK_DEVICE_ROSTER);
+      mock.onPost(`${US_BASE_URL}d4/device_detail`).reply(200, MOCK_FEEDER_DETAIL);
+
+      const feeders = await api.getFeeders();
+
+      const expected = localWeekdayRepeats('UTC') === 1
+        ? [{ time: 24300, amount: 20, name: 'Breakfast' }, { time: 63000, amount: 10, name: 'Dinner' }]
+        : [];
+      expect(feeders[0].feedPlanToday).toEqual(expected);
+    });
+
+    it("picks today's meals from the plan using the configured timezone's weekday", async () => {
+      // Saturday 23:30 UTC is already Sunday (repeats 1) in Amsterdam.
+      api = new PetkitCloudAPI(
+        { ...credentials(), timezone: 'Europe/Amsterdam' },
+        { retryDelays: [0, 0, 0], now: () => new Date('2026-10-03T23:30:00Z') },
+      );
+      mockAuthFlow();
+      mock.onPost(`${US_BASE_URL}discovery/device_roster_v2`).reply(200, MOCK_DEVICE_ROSTER);
+      mock.onPost(`${US_BASE_URL}d4/device_detail`).reply(200, MOCK_FEEDER_DETAIL);
+
+      const feeders = await api.getFeeders();
+
+      expect(feeders[0].feedPlanToday).toEqual([
+        { time: 24300, amount: 20, name: 'Breakfast' },
+        { time: 63000, amount: 10, name: 'Dinner' },
+      ]);
+    });
+  });
+
+  // --- saveFeedPlan ---
+
+  describe('saveFeedPlan()', () => {
+    it('posts the whole weekly plan to d4/saveFeed in the shape device_detail returns it', async () => {
+      mockAuthFlow();
+      mock.onPost(`${US_BASE_URL}d4/saveFeed`).reply(200, { result: 'success' });
+
+      await api.saveFeedPlan(100, [
+        {
+          repeats: 1,
+          suspended: 0,
+          meals: [
+            { time: 24300, amount: 20, name: 'Breakfast' },
+            { time: 63000, amount: 10, name: 'Dinner' },
+          ],
+        },
+        { repeats: 2, suspended: 1, meals: [] },
+      ]);
+
+      const call = mock.history.post.find(req => req.url === `${US_BASE_URL}d4/saveFeed`);
+      const body = new URLSearchParams(call!.data as string);
+      expect(body.get('deviceId')).toBe('100');
+      expect(JSON.parse(body.get('feedDailyList')!)).toEqual([
+        {
+          repeats: 1,
+          suspended: 0,
+          items: [
+            { id: '24300', time: 24300, amount: 20, name: 'Breakfast' },
+            { id: '63000', time: 63000, amount: 10, name: 'Dinner' },
+          ],
+        },
+        { repeats: 2, suspended: 1, items: [] },
+      ]);
     });
   });
 

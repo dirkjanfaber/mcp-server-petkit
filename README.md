@@ -22,6 +22,8 @@ The D4 only accepts these five portion sizes: `10`, `20`, `30`, `40`, `50`.
 
 ### Feed totals are per device, not per cat
 
+`list_feeders` also returns `feedPlanToday`: today's scheduled meals from the feeder's weekly plan (`d4/device_detail`'s `multiFeedItem`), each with its readable `time`, the `feedTime` (seconds since midnight) that `skip_scheduled_feed` takes, the portion `amount` in `feed_now`'s units, and the meal `name`.
+
 `list_feeders`' `fedToday`/`fedTodayScheduled`/`fedTodayExtra`/`fedTodayPlanned`/`dispensesToday`/`feedTimesToday` fields reflect what each *physical feeder* dispensed - PetKit has no way to attribute a dispense to a specific cat. If your cats share or steal from each other's bowls, these numbers won't tell you what any one cat actually ate.
 
 ### Common setting keys

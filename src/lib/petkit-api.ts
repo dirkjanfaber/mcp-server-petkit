@@ -1,6 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
 import { createHash } from 'crypto';
-import { Feeder, PetkitBackend, PetkitCredentials } from '../types/petkit.js';
+import { FeedPlanDay, Feeder, PetkitBackend, PetkitCredentials } from '../types/petkit.js';
 
 const REGION_SERVER_URL = 'https://passport.petkt.com/6/account/regionservers';
 // PetKit's app hardcodes China to this base URL rather than trusting the gateway
@@ -59,6 +59,8 @@ export class PetkitApiError extends Error {
 
 export interface PetkitAPIOptions {
   retryDelays?: number[];
+  // Clock used to work out today's weekday; injectable for tests.
+  now?: () => Date;
 }
 
 function toPythonDictLiteral(obj: Record<string, string>): string {
@@ -76,10 +78,19 @@ export function localDayCompact(timeZone: string, now: Date = new Date()): strin
   return now.toLocaleDateString('en-CA', { timeZone }).replace(/-/g, '');
 }
 
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+// feedDailyList's `repeats` numbers the week from Sunday = 1 to Saturday = 7 - confirmed
+// live on 2026-10-01 (a Thursday-only meal added in the app landed under repeats 5).
+export function localWeekdayRepeats(timeZone: string, now: Date = new Date()): number {
+  return WEEKDAYS.indexOf(now.toLocaleDateString('en-US', { weekday: 'short', timeZone })) + 1;
+}
+
 export class PetkitCloudAPI implements PetkitBackend {
   private credentials: PetkitCredentials;
   private http: AxiosInstance;
   private retryDelays: number[];
+  private now: () => Date;
   private token: string | null = null;
   private tokenExpiresAt = 0;
   private baseUrl: string | null = null;
@@ -89,6 +100,7 @@ export class PetkitCloudAPI implements PetkitBackend {
     this.credentials = credentials;
     this.http = axios.create();
     this.retryDelays = options.retryDelays ?? DEFAULT_RETRY_DELAYS_MS;
+    this.now = options.now ?? (() => new Date());
   }
 
   private async post(url: string, data: Record<string, string>, headers: Record<string, string>): Promise<any> {
@@ -217,6 +229,16 @@ export class PetkitCloudAPI implements PetkitBackend {
             id: String(device.id),
           }, this.sessionHeaders());
           const d = detail.result;
+          const feedPlan: FeedPlanDay[] = (d.multiFeedItem?.feedDailyList ?? []).map((day: any) => ({
+            repeats: day.repeats,
+            suspended: day.suspended,
+            meals: (day.items ?? []).map((item: any) => ({
+              time: item.time,
+              amount: item.amount,
+              name: item.name,
+            })),
+          }));
+          const today = feedPlan.find(day => day.repeats === localWeekdayRepeats(this.timezone(), this.now()));
           feeders.push({
             id: d.id,
             type: 'd4',
@@ -245,6 +267,9 @@ export class PetkitCloudAPI implements PetkitBackend {
                 feedTimes: d.state.feedState.feedTimes,
               },
             },
+            feedPlan,
+            // A suspended day dispenses nothing, whatever meals it still lists.
+            feedPlanToday: today && today.suspended !== 1 ? today.meals : [],
           });
         }
       }
@@ -264,6 +289,30 @@ export class PetkitCloudAPI implements PetkitBackend {
         day: localDayCompact(this.timezone()),
         deviceId: String(deviceId),
         time: '-1',
+      }, this.sessionHeaders());
+    });
+  }
+
+  // Replaces the whole recurring weekly plan - PetKit has no per-meal edit. Endpoint and
+  // params are from py-petkit-api's SAVE_FEED command, which passes feedDailyList through
+  // unchanged; we send it back in the same shape device_detail's multiFeedItem returns.
+  async saveFeedPlan(deviceId: number, plan: FeedPlanDay[]): Promise<void> {
+    const feedDailyList = plan.map(day => ({
+      repeats: day.repeats,
+      suspended: day.suspended,
+      items: day.meals.map(meal => ({
+        id: String(meal.time),
+        time: meal.time,
+        amount: meal.amount,
+        name: meal.name,
+      })),
+    }));
+
+    await this.authenticate();
+    return this.withRetry(async () => {
+      await this.post(`${this.baseUrl}d4/saveFeed`, {
+        deviceId: String(deviceId),
+        feedDailyList: JSON.stringify(feedDailyList),
       }, this.sessionHeaders());
     });
   }

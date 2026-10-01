@@ -31,10 +31,10 @@ export interface Feeder {
     desiccantLeftDays: number;
     feeding: number;
     // Tracked per device, not per cat - PetKit has no way to know which cat actually
-    // ate from which bowl. `feedTimes` is keyed by seconds-since-midnight for each
-    // configured schedule slot (e.g. "63000" = 17:30); whether the count resets daily
-    // or accumulates since the schedule was set up is unconfirmed - observed counts
-    // greater than 1 on slots that should only fire once/day suggest the latter.
+    // ate from which bowl. `feedTimes` is keyed by seconds-since-midnight of today's
+    // dispenses: scheduled slots (e.g. "63000" = 17:30) plus manual feeds at the time
+    // they happened. A skipped slot drops out. Values observed so far: 1 for done, 3 for
+    // still pending - not amounts.
     feedState: {
       realAmountTotal: number;
       planAmountTotal: number;
@@ -44,6 +44,27 @@ export interface Feeder {
       feedTimes: Record<string, number>;
     };
   };
+  // The recurring weekly plan, from device_detail's multiFeedItem.feedDailyList.
+  feedPlan: FeedPlanDay[];
+  // Today's entry from feedPlan (by the configured timezone's weekday); empty when
+  // today's plan is suspended. Meals skipped for today are still listed here - see
+  // feedState.feedTimes for what is still pending.
+  feedPlanToday: FeedPlanMeal[];
+}
+
+// `repeats` is the weekday this day's plan applies to: 1 = Sunday ... 7 = Saturday.
+// `amount` uses the same units as feedNow (1/10 cup in the app = 10).
+export interface FeedPlanDay {
+  repeats: number;
+  suspended: number;
+  meals: FeedPlanMeal[];
+}
+
+export interface FeedPlanMeal {
+  // Seconds since midnight - also the id skipScheduledFeed/restoreScheduledFeed take.
+  time: number;
+  amount: number;
+  name: string;
 }
 
 export interface PetkitBackend {
@@ -51,6 +72,7 @@ export interface PetkitBackend {
   getFeeders(): Promise<Feeder[]>;
   feedNow(deviceId: number, amount: number): Promise<void>;
   updateFeederSetting(deviceId: number, key: string, value: number): Promise<void>;
+  saveFeedPlan(deviceId: number, plan: FeedPlanDay[]): Promise<void>;
   skipScheduledFeed(deviceId: number, feedTime: number): Promise<void>;
   restoreScheduledFeed(deviceId: number, feedTime: number): Promise<void>;
 }

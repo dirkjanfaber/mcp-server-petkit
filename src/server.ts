@@ -16,6 +16,12 @@ function onOff(value: number): 'on' | 'off' {
   return value === 1 ? 'on' : 'off';
 }
 
+function clockTime(secondsSinceMidnight: number): string {
+  const hours = Math.floor(secondsSinceMidnight / 3600);
+  const minutes = Math.floor((secondsSinceMidnight % 3600) / 60);
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+}
+
 const DeviceIdSchema = z.number().int().positive();
 
 const FeedNowArgs = z.object({
@@ -40,7 +46,7 @@ const SCHEDULED_FEED_INPUT_SCHEMA = {
     deviceId: { type: 'number', description: 'Numeric device ID (from list_feeders)' },
     feedTime: {
       type: 'number',
-      description: "Scheduled meal time in seconds since midnight (e.g. 24300 = 06:45). Take it from the feeding plan, not blindly from list_feeders' feedTimesToday: that also lists today's manual feed_now dispenses, which are not scheduled meals and cannot be skipped.",
+      description: "Scheduled meal time in seconds since midnight (e.g. 24300 = 06:45). Take it from list_feeders' feedPlanToday[].feedTime, not from feedTimesToday: that also lists today's manual feed_now dispenses, which are not scheduled meals and cannot be skipped.",
     },
   },
   required: ['deviceId', 'feedTime'],
@@ -49,7 +55,7 @@ const SCHEDULED_FEED_INPUT_SCHEMA = {
 export const TOOLS = [
   {
     name: 'list_feeders',
-    description: "List all PetKit Fresh Element Solo (D4) feeders and their live state (food/battery/desiccant status, lock/light/sound settings, and today's feed totals). Feed totals are tracked per device, not per cat - if multiple cats share or steal from each other's feeders, these numbers reflect what each physical feeder dispensed, not what any one cat ate.",
+    description: "List all PetKit Fresh Element Solo (D4) feeders and their live state (food/battery/desiccant status, lock/light/sound settings, today's feed totals, and today's feeding plan with each meal's portion in feedPlanToday - amounts use feed_now's units, so feeding a meal early should use that meal's amount). Feed totals are tracked per device, not per cat - if multiple cats share or steal from each other's feeders, these numbers reflect what each physical feeder dispensed, not what any one cat ate.",
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -116,6 +122,12 @@ function summarizeFeeder(f: Feeder) {
     fedTodayPlanned: f.state.feedState.planAmountTotal,
     dispensesToday: f.state.feedState.times,
     feedTimesToday: f.state.feedState.feedTimes,
+    feedPlanToday: f.feedPlanToday.map(meal => ({
+      time: clockTime(meal.time),
+      feedTime: meal.time,
+      amount: meal.amount,
+      name: meal.name,
+    })),
   };
 }
 

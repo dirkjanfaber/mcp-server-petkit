@@ -18,6 +18,11 @@ function makeFeeder(overrides: Partial<Feeder> = {}): Feeder {
         times: 3, feedTimes: { '24300': 1, '43200': 1, '63000': 3, '82800': 3 },
       },
     },
+    feedPlan: [],
+    feedPlanToday: [
+      { time: 24300, amount: 20, name: 'Breakfast' },
+      { time: 63000, amount: 10, name: 'Dinner' },
+    ],
     ...overrides,
   };
 }
@@ -99,6 +104,17 @@ describe('list_feeders', () => {
       dispensesToday: 3,
       feedTimesToday: { '24300': 1, '43200': 1, '63000': 3, '82800': 3 },
     });
+  });
+
+  it("lists today's planned meals with their portion and a readable time", async () => {
+    const api = makeApi({ getFeeders: jest.fn().mockResolvedValue([makeFeeder()]) });
+    const result = await handleToolCall('list_feeders', {}, api);
+    const parsed = JSON.parse(textOf(result));
+
+    expect(parsed[0].feedPlanToday).toEqual([
+      { time: '06:45', feedTime: 24300, amount: 20, name: 'Breakfast' },
+      { time: '17:30', feedTime: 63000, amount: 10, name: 'Dinner' },
+    ]);
   });
 });
 
