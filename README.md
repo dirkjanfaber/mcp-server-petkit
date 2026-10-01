@@ -72,6 +72,76 @@ Add to your `claude_desktop_config.json`:
 }
 ```
 
+## Remote use: claude.ai connector (HTTP + OAuth)
+
+To use the server from claude.ai and the Claude mobile apps, run it in HTTP mode on an
+always-on machine and add it as a custom connector. claude.ai connects from the
+internet, so the server needs a public `https://` URL - a Cloudflare Tunnel or
+Tailscale Funnel gives you one without opening ports on your router.
+
+HTTP mode is single-user: when you connect Claude, the server shows a page asking for
+your **owner passphrase**. Anyone who knows it can authorize a client, and anyone with
+a token can dispense food or change the feeding plan - pick a strong one.
+
+```bash
+npx mcp-server-petkit --http   # or MCP_TRANSPORT=http
+```
+
+| Variable | Default | |
+|----------|---------|-|
+| `MCP_PUBLIC_URL` | (required) | The `https://` URL claude.ai reaches the server on |
+| `MCP_OWNER_PASSWORD` | (required) | Passphrase for authorizing Claude, at least 12 characters |
+| `MCP_HOST` | `127.0.0.1` | Interface to listen on; the Docker image sets `0.0.0.0` |
+| `MCP_PORT` | `3000` | |
+| `MCP_STATE_FILE` | `~/.mcp-server-petkit/oauth-state.json` | Registered clients and refresh-token hashes, so Claude stays connected across restarts |
+
+plus the `PETKIT_*` variables from [Configuration](#configuration).
+
+### Docker (e.g. on a Raspberry Pi)
+
+Each release publishes `ghcr.io/dirkjanfaber/mcp-server-petkit` for amd64 and arm64,
+tagged with the version and `latest`. With a Cloudflare Tunnel alongside it, no port
+needs publishing: create a tunnel in the Cloudflare dashboard, point its public
+hostname at `http://petkit-mcp:3000`, and put its token in `.env` next to the PetKit
+and `MCP_*` settings:
+
+```yaml
+# docker-compose.yml
+services:
+  petkit-mcp:
+    image: ghcr.io/dirkjanfaber/mcp-server-petkit:latest   # or pin a version, e.g. :0.3.0
+    restart: unless-stopped
+    env_file: .env   # PETKIT_*, MCP_PUBLIC_URL, MCP_OWNER_PASSWORD
+    volumes:
+      - petkit-data:/data
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel run
+    restart: unless-stopped
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN}
+volumes:
+  petkit-data:
+```
+
+Update with `docker compose pull && docker compose up -d`. To build the image yourself
+instead, replace `image:` with `build: https://github.com/dirkjanfaber/mcp-server-petkit.git`.
+
+The server trusts one proxy hop (`X-Forwarded-For` from cloudflared) for rate limiting.
+Don't also publish its port directly to the internet.
+
+### Connecting Claude
+
+In claude.ai: **Settings → Connectors → Add custom connector**, with URL
+`https://<your public host>/mcp`. Claude registers itself, opens the passphrase page,
+and once you allow it, the tools show up in claude.ai and the mobile apps.
+
+**PetKit allows one session per account.** The server's login signs the PetKit app
+out (and vice versa); it re-logs in on its own when that happens, but expect the app
+to ask you to log in again whenever the server restarts or its session lapses. Running
+the stdio server, Node-RED's PetKit nodes, or a second HTTP instance on the same
+account makes them take turns signing each other out.
+
 ## References
 
 - Actively maintained reference client (Python) - https://github.com/Jezza34000/py-petkit-api - source of the confirmed-working client fingerprint and current endpoint constants

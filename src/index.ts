@@ -1,5 +1,8 @@
 #!/usr/bin/env node
+import { homedir } from 'os';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { loadHttpConfig } from './config.js';
+import { createHttpApp } from './http.js';
 import { PetkitCloudAPI } from './lib/petkit-api.js';
 import { createServer } from './server.js';
 
@@ -17,14 +20,30 @@ if (!email || !password || !region) {
 }
 
 const api = new PetkitCloudAPI({ email, password, region, timezone });
-const server = createServer(api, VERSION);
+const httpMode = process.argv.includes('--http') || process.env.MCP_TRANSPORT === 'http';
 
 async function main() {
+  if (httpMode) {
+    const config = loadHttpConfig(process.env, homedir());
+    const app = createHttpApp({
+      api,
+      version: VERSION,
+      publicUrl: config.publicUrl,
+      ownerPassword: config.ownerPassword,
+      stateFile: config.stateFile,
+    });
+    app.listen(config.port, config.host, () => {
+      console.error(`mcp-server-petkit ${VERSION} listening on http://${config.host}:${config.port}/mcp (public: ${new URL('/mcp', config.publicUrl)})`);
+    });
+    return;
+  }
+
+  const server = createServer(api, VERSION);
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
 
 main().catch(err => {
-  console.error(err);
+  console.error(err instanceof Error ? err.message : err);
   process.exit(1);
 });
