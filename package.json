@@ -1,7 +1,7 @@
 {
   "name": "mcp-server-petkit",
   "mcpName": "io.github.dirkjanfaber/mcp-server-petkit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server for the PetKit cloud API (Fresh Element Solo feeder)",
   "keywords": ["mcp", "petkit", "feeder", "pet"],
   "author": "Dirk-Jan Faber",
