@@ -1,0 +1,48 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.dirkjanfaber/mcp-server-petkit",
+  "title": "PetKit",
+  "description": "Unofficial MCP server for PetKit smart feeders: status, feeding history and schedule control.",
+  "repository": {
+    "url": "https://github.com/dirkjanfaber/mcp-server-petkit",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "mcp-server-petkit",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "PETKIT_EMAIL",
+          "description": "Email address of your PetKit account",
+          "isRequired": true,
+          "format": "string"
+        },
+        {
+          "name": "PETKIT_PASSWORD",
+          "description": "Password of your PetKit account",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "PETKIT_REGION",
+          "description": "Region name exactly as shown in the PetKit app (e.g. \"Netherlands\", \"United States\")",
+          "isRequired": true,
+          "format": "string"
+        },
+        {
+          "name": "PETKIT_TIMEZONE",
+          "description": "IANA timezone (e.g. \"Europe/Amsterdam\"); defaults to the host's timezone",
+          "isRequired": false,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}
