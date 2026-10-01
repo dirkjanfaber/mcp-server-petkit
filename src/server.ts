@@ -29,6 +29,23 @@ const UpdateFeederSettingArgs = z.object({
   value: z.number(),
 });
 
+const ScheduledFeedArgs = z.object({
+  deviceId: DeviceIdSchema,
+  feedTime: z.number().int().min(0).max(86399),
+});
+
+const SCHEDULED_FEED_INPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    deviceId: { type: 'number', description: 'Numeric device ID (from list_feeders)' },
+    feedTime: {
+      type: 'number',
+      description: "Scheduled meal time in seconds since midnight (e.g. 24300 = 06:45). Take it from the feeding plan, not blindly from list_feeders' feedTimesToday: that also lists today's manual feed_now dispenses, which are not scheduled meals and cannot be skipped.",
+    },
+  },
+  required: ['deviceId', 'feedTime'],
+} as const;
+
 export const TOOLS = [
   {
     name: 'list_feeders',
@@ -63,6 +80,16 @@ export const TOOLS = [
       },
       required: ['deviceId', 'key', 'value'],
     },
+  },
+  {
+    name: 'skip_scheduled_feed',
+    description: "Skip one of today's scheduled meals on a feeder, without changing the recurring feeding plan. Only affects today; undo with restore_scheduled_feed.",
+    inputSchema: SCHEDULED_FEED_INPUT_SCHEMA,
+  },
+  {
+    name: 'restore_scheduled_feed',
+    description: "Restore a scheduled meal for today that was previously skipped with skip_scheduled_feed.",
+    inputSchema: SCHEDULED_FEED_INPUT_SCHEMA,
   },
 ] as const;
 
@@ -111,6 +138,18 @@ export async function handleToolCall(name: string, args: unknown, api: PetkitBac
       const { deviceId, key, value } = parseArgs(UpdateFeederSettingArgs, args);
       await api.updateFeederSetting(deviceId, key, value);
       return { content: [{ type: 'text' as const, text: `Set ${key}=${value} on feeder ${deviceId}` }] };
+    }
+
+    case 'skip_scheduled_feed': {
+      const { deviceId, feedTime } = parseArgs(ScheduledFeedArgs, args);
+      await api.skipScheduledFeed(deviceId, feedTime);
+      return { content: [{ type: 'text' as const, text: `Skipped today's ${feedTime}s feed on feeder ${deviceId}` }] };
+    }
+
+    case 'restore_scheduled_feed': {
+      const { deviceId, feedTime } = parseArgs(ScheduledFeedArgs, args);
+      await api.restoreScheduledFeed(deviceId, feedTime);
+      return { content: [{ type: 'text' as const, text: `Restored today's ${feedTime}s feed on feeder ${deviceId}` }] };
     }
 
     default:

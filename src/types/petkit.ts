@@ -51,4 +51,6 @@ export interface PetkitBackend {
   getFeeders(): Promise<Feeder[]>;
   feedNow(deviceId: number, amount: number): Promise<void>;
   updateFeederSetting(deviceId: number, key: string, value: number): Promise<void>;
+  skipScheduledFeed(deviceId: number, feedTime: number): Promise<void>;
+  restoreScheduledFeed(deviceId: number, feedTime: number): Promise<void>;
 }

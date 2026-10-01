@@ -13,6 +13,8 @@ MCP (Model Context Protocol) server for the [PetKit](https://www.petkit.com) clo
 | `list_feeders` | List all Fresh Element Solo feeders and their live state (food/battery/desiccant status, lock/light/sound settings, today's feed totals) |
 | `feed_now` | Dispense food immediately |
 | `update_feeder_setting` | Change a numeric setting (child lock, indicator light, dispense tone, shortage alarm, ...) |
+| `skip_scheduled_feed` | Skip one of today's scheduled meals (`d4/removeDailyFeed`), leaving the recurring plan untouched |
+| `restore_scheduled_feed` | Undo a skip for today (`d4/restoreDailyFeed`) |
 
 ### Feed amounts
 

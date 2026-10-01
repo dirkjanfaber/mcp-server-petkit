@@ -28,6 +28,8 @@ function makeApi(overrides: Partial<PetkitBackend> = {}): PetkitBackend {
     getFeeders: jest.fn().mockResolvedValue([]),
     feedNow: jest.fn().mockResolvedValue(undefined),
     updateFeederSetting: jest.fn().mockResolvedValue(undefined),
+    skipScheduledFeed: jest.fn().mockResolvedValue(undefined),
+    restoreScheduledFeed: jest.fn().mockResolvedValue(undefined),
     ...overrides,
   } as unknown as PetkitBackend;
 }
@@ -138,6 +140,43 @@ describe('update_feeder_setting', () => {
     await expect(
       handleToolCall('update_feeder_setting', { deviceId: 100, key: 'manualLock' }, api)
     ).rejects.toThrow();
+  });
+});
+
+describe('skip_scheduled_feed', () => {
+  it('calls skipScheduledFeed with validated args', async () => {
+    const api = makeApi();
+    await handleToolCall('skip_scheduled_feed', { deviceId: 100, feedTime: 24300 }, api);
+    expect(api.skipScheduledFeed).toHaveBeenCalledWith(100, 24300);
+  });
+
+  it('rejects a feedTime outside a single day', async () => {
+    const api = makeApi();
+    await expect(
+      handleToolCall('skip_scheduled_feed', { deviceId: 100, feedTime: 86400 }, api)
+    ).rejects.toThrow();
+    expect(api.skipScheduledFeed).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing feedTime', async () => {
+    const api = makeApi();
+    await expect(handleToolCall('skip_scheduled_feed', { deviceId: 100 }, api)).rejects.toThrow();
+  });
+});
+
+describe('restore_scheduled_feed', () => {
+  it('calls restoreScheduledFeed with validated args', async () => {
+    const api = makeApi();
+    await handleToolCall('restore_scheduled_feed', { deviceId: 100, feedTime: 24300 }, api);
+    expect(api.restoreScheduledFeed).toHaveBeenCalledWith(100, 24300);
+  });
+
+  it('rejects a non-integer feedTime', async () => {
+    const api = makeApi();
+    await expect(
+      handleToolCall('restore_scheduled_feed', { deviceId: 100, feedTime: 24300.5 }, api)
+    ).rejects.toThrow();
+    expect(api.restoreScheduledFeed).not.toHaveBeenCalled();
   });
 });
 

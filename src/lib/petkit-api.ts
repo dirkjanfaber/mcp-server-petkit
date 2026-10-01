@@ -48,6 +48,7 @@ const SERVER_BUSY_CODES = [1, 99];
 
 // D4 (Fresh Element Solo) only accepts these portion sizes.
 const FEEDER_AMOUNTS = [10, 20, 30, 40, 50];
+const SECONDS_PER_DAY = 86400;
 
 export class PetkitApiError extends Error {
   constructor(public readonly code: number, message: string) {
@@ -68,8 +69,11 @@ function toPythonDictLiteral(obj: Record<string, string>): string {
   return `{${entries.join(', ')}}`;
 }
 
-function todayCompact(): string {
-  return new Date().toISOString().slice(0, 10).replace(/-/g, '');
+// PetKit's `day` is the feeder's local calendar day. Deriving it from UTC would point at
+// yesterday's schedule for the first hours after local midnight east of Greenwich.
+export function localDayCompact(timeZone: string, now: Date = new Date()): string {
+  // en-CA formats dates as YYYY-MM-DD.
+  return now.toLocaleDateString('en-CA', { timeZone }).replace(/-/g, '');
 }
 
 export class PetkitCloudAPI implements PetkitBackend {
@@ -201,7 +205,7 @@ export class PetkitCloudAPI implements PetkitBackend {
       const feeders: Feeder[] = [];
       for (const groupId of this.groupIds) {
         const roster = await this.post(`${this.baseUrl}discovery/device_roster_v2`, {
-          day: todayCompact(),
+          day: localDayCompact(this.timezone()),
           groupId: String(groupId),
         }, this.sessionHeaders());
 
@@ -257,9 +261,35 @@ export class PetkitCloudAPI implements PetkitBackend {
     return this.withRetry(async () => {
       await this.post(`${this.baseUrl}d4/saveDailyFeed`, {
         amount: String(amount),
-        day: todayCompact(),
+        day: localDayCompact(this.timezone()),
         deviceId: String(deviceId),
         time: '-1',
+      }, this.sessionHeaders());
+    });
+  }
+
+  // Skips one of today's scheduled meals. feedTime is seconds since midnight - the same
+  // key list_feeders reports in feedTimesToday. Endpoint and "s<seconds>" id format are
+  // from py-petkit-api's REMOVE_DAILY_FEED command.
+  async skipScheduledFeed(deviceId: number, feedTime: number): Promise<void> {
+    return this.postDailyFeedChange('removeDailyFeed', deviceId, feedTime);
+  }
+
+  async restoreScheduledFeed(deviceId: number, feedTime: number): Promise<void> {
+    return this.postDailyFeedChange('restoreDailyFeed', deviceId, feedTime);
+  }
+
+  private async postDailyFeedChange(endpoint: string, deviceId: number, feedTime: number): Promise<void> {
+    if (!Number.isInteger(feedTime) || feedTime < 0 || feedTime >= SECONDS_PER_DAY) {
+      throw new Error(`Invalid feed time ${feedTime}. Expected seconds since midnight (0-${SECONDS_PER_DAY - 1})`);
+    }
+
+    await this.authenticate();
+    return this.withRetry(async () => {
+      await this.post(`${this.baseUrl}d4/${endpoint}`, {
+        day: localDayCompact(this.timezone()),
+        deviceId: String(deviceId),
+        id: `s${feedTime}`,
       }, this.sessionHeaders());
     });
   }

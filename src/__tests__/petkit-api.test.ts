@@ -1,6 +1,7 @@
+import { jest } from '@jest/globals';
 import axios from 'axios';
 import MockAdapter from 'axios-mock-adapter';
-import { PetkitCloudAPI, timezoneOffsetHours } from '../lib/petkit-api';
+import { PetkitCloudAPI, localDayCompact, timezoneOffsetHours } from '../lib/petkit-api';
 
 const REGION_SERVER_URL = 'https://passport.petkt.com/6/account/regionservers';
 const US_BASE_URL = 'https://api.petkt.com/latest/';
@@ -85,6 +86,21 @@ describe('PetkitCloudAPI', () => {
   describe('timezoneOffsetHours()', () => {
     it('returns 0.0 for UTC', () => {
       expect(timezoneOffsetHours('UTC')).toBe('0.0');
+    });
+  });
+
+  // --- localDayCompact ---
+
+  describe('localDayCompact()', () => {
+    // 23:30 UTC on Oct 1 is already 01:30 on Oct 2 in Amsterdam (CEST, UTC+2).
+    const lateUtc = new Date('2026-10-01T23:30:00Z');
+
+    it('returns the calendar day in the given timezone, not in UTC', () => {
+      expect(localDayCompact('Europe/Amsterdam', lateUtc)).toBe('20261002');
+    });
+
+    it('matches the UTC day for UTC', () => {
+      expect(localDayCompact('UTC', lateUtc)).toBe('20261001');
     });
   });
 
@@ -211,6 +227,50 @@ describe('PetkitCloudAPI', () => {
       const body = new URLSearchParams(call!.data as string);
       expect(body.get('id')).toBe('100');
       expect(JSON.parse(body.get('kv')!)).toEqual({ manualLock: 1 });
+    });
+  });
+
+  // --- skip / restore scheduled feed ---
+
+  describe.each([
+    ['skipScheduledFeed', 'removeDailyFeed'],
+    ['restoreScheduledFeed', 'restoreDailyFeed'],
+  ] as const)('%s()', (method, endpoint) => {
+    it(`posts to d4/${endpoint} with the feed id as "s" + seconds since midnight`, async () => {
+      mockAuthFlow();
+      mock.onPost(`${US_BASE_URL}d4/${endpoint}`).reply(200, { result: {} });
+
+      await api[method](100, 24300);
+
+      const call = mock.history.post.find(req => req.url === `${US_BASE_URL}d4/${endpoint}`);
+      const body = new URLSearchParams(call!.data as string);
+      expect(body.get('deviceId')).toBe('100');
+      expect(body.get('id')).toBe('s24300');
+      expect(body.get('day')).toMatch(/^\d{8}$/);
+    });
+
+    it('sends the day in the configured timezone rather than UTC', async () => {
+      jest.useFakeTimers({ doNotFake: ['setTimeout', 'clearTimeout', 'setImmediate', 'nextTick', 'queueMicrotask'] });
+      jest.setSystemTime(new Date('2026-10-01T23:30:00Z'));
+      try {
+        const amsterdamApi = new PetkitCloudAPI({ ...credentials(), timezone: 'Europe/Amsterdam' }, { retryDelays: [0, 0, 0] });
+        mockAuthFlow();
+        mock.onPost(`${US_BASE_URL}d4/${endpoint}`).reply(200, { result: {} });
+
+        await amsterdamApi[method](100, 24300);
+
+        const call = mock.history.post.find(req => req.url === `${US_BASE_URL}d4/${endpoint}`);
+        expect(new URLSearchParams(call!.data as string).get('day')).toBe('20261002');
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('rejects a feed time outside a single day without making a network call', async () => {
+      mockAuthFlow();
+
+      await expect(api[method](100, 86400)).rejects.toThrow(/feed time/i);
+      expect(mock.history.post.filter(req => req.url?.includes(endpoint))).toHaveLength(0);
     });
   });
 
