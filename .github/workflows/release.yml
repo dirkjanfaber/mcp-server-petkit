@@ -34,10 +34,31 @@ jobs:
       - run: npm run build
       - run: npm test
 
+      # Skipped when the version is already on npm, so a release whose later steps
+      # failed can be re-run without npm refusing to publish over it.
       - name: Publish to npm
-        run: npm publish --provenance --access public
+        run: |
+          version=$(jq -r .version package.json)
+          if npm view "mcp-server-petkit@$version" version >/dev/null 2>&1; then
+            echo "mcp-server-petkit@$version is already on npm, skipping"
+          else
+            npm publish --provenance --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # npm can take minutes to make a new version visible ("being processed"), and the
+      # MCP Registry rejects a version it can't find on npm yet.
+      - name: Wait for the version to appear on npm
+        run: |
+          version=$(jq -r .version package.json)
+          for i in $(seq 1 40); do
+            npm view "mcp-server-petkit@$version" version >/dev/null 2>&1 && exit 0
+            echo "not visible on npm yet, retrying in 30s ($i/40)"
+            sleep 30
+          done
+          echo "::error::mcp-server-petkit@$version still not visible on npm after 20 minutes"
+          exit 1
 
       - name: Install mcp-publisher
         run: |
