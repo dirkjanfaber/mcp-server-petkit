@@ -1,5 +1,5 @@
 # Runs the server in HTTP mode, for use as a claude.ai custom connector.
-# Builds on amd64 and arm64 (e.g. a Raspberry Pi) alike.
+# Builds on amd64, arm64 and 32-bit arm/v7 (e.g. a Raspberry Pi) alike.
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./

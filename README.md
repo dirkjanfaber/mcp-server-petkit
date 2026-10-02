@@ -76,8 +76,8 @@ Add to your `claude_desktop_config.json`:
 
 To use the server from claude.ai and the Claude mobile apps, run it in HTTP mode on an
 always-on machine and add it as a custom connector. claude.ai connects from the
-internet, so the server needs a public `https://` URL - a Cloudflare Tunnel or
-Tailscale Funnel gives you one without opening ports on your router.
+internet, so the server needs a public `https://` URL. A Cloudflare Tunnel or
+Tailscale Funnel gives you one without opening ports on your router (see below).
 
 HTTP mode is single-user: when you connect Claude, the server shows a page asking for
 your **owner passphrase**. Anyone who knows it can authorize a client, and anyone with
@@ -99,11 +99,20 @@ plus the `PETKIT_*` variables from [Configuration](#configuration).
 
 ### Docker (e.g. on a Raspberry Pi)
 
-Each release publishes `ghcr.io/dirkjanfaber/mcp-server-petkit` for amd64 and arm64,
-tagged with the version and `latest`. With a Cloudflare Tunnel alongside it, no port
-needs publishing: create a tunnel in the Cloudflare dashboard, point its public
-hostname at `http://petkit-mcp:3000`, and put its token in `.env` next to the PetKit
-and `MCP_*` settings:
+Each release publishes `ghcr.io/dirkjanfaber/mcp-server-petkit` for amd64, arm64 and
+arm/v7 (32-bit Raspberry Pi OS), tagged with the version and `latest`. Put the PetKit and `MCP_*` settings in a `.env`
+next to the compose file (`chmod 600 .env`), and give the server a public URL with one
+of the two options below.
+
+Private overlay networks such as ZeroTier or plain Tailscale aren't enough on their
+own: claude.ai connects from Anthropic's servers, not from your devices.
+
+#### Option 1: Cloudflare Tunnel (needs a domain on Cloudflare)
+
+With a Cloudflare Tunnel alongside the server, no port needs publishing: in the
+Cloudflare dashboard, go to **Zero Trust → Networks → Tunnels**, create a Cloudflared
+tunnel, and point its public hostname at `http://petkit-mcp:3000` (service type HTTP).
+Put the tunnel's token in `.env` as `TUNNEL_TOKEN`:
 
 ```yaml
 # docker-compose.yml
@@ -124,11 +133,59 @@ volumes:
   petkit-data:
 ```
 
+Don't put Cloudflare Access in front of the hostname: claude.ai can't get past its
+login page, and the owner passphrase already guards the server.
+
+#### Option 2: Tailscale Funnel (no domain needed)
+
+Tailscale Funnel gives the Pi a public `https://<machine>.<tailnet>.ts.net` URL. It runs
+fine next to ZeroTier or other VPNs.
+
+1. Install Tailscale on the Pi and log in:
+   `curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up`
+2. In the Tailscale admin console, enable **MagicDNS** and **HTTPS Certificates**
+   (under DNS) and allow Funnel for the machine. `tailscale funnel` offers a link
+   to switch it on when it isn't allowed yet.
+3. Publish the server's port on loopback only, so Funnel is the only way in:
+
+   ```yaml
+   # docker-compose.yml
+   services:
+     petkit-mcp:
+       image: ghcr.io/dirkjanfaber/mcp-server-petkit:latest
+       restart: unless-stopped
+       env_file: .env   # PETKIT_*, MCP_PUBLIC_URL, MCP_OWNER_PASSWORD
+       ports:
+         - "127.0.0.1:3000:3000"
+       volumes:
+         - petkit-data:/data
+   volumes:
+     petkit-data:
+   ```
+
+4. Start the funnel. The setting persists across reboots:
+   `sudo tailscale funnel --bg 3000`. `tailscale funnel status` shows the public URL.
+   Put it in `.env` as `MCP_PUBLIC_URL`, then run `docker compose up -d`.
+
+The URL contains the machine name, so rename the machine first if you want a nicer one.
+Changing the URL later means updating `MCP_PUBLIC_URL` and reconnecting Claude.
+
+#### Either way
+
+Check the public URL before connecting Claude:
+
+```bash
+curl https://<your public host>/.well-known/oauth-authorization-server
+```
+
+It should return JSON whose `issuer` matches `MCP_PUBLIC_URL`. A freshly enabled
+Funnel can take a minute to start answering.
+
 Update with `docker compose pull && docker compose up -d`. To build the image yourself
 instead, replace `image:` with `build: https://github.com/dirkjanfaber/mcp-server-petkit.git`.
 
-The server trusts one proxy hop (`X-Forwarded-For` from cloudflared) for rate limiting.
-Don't also publish its port directly to the internet.
+The server trusts one proxy hop (`X-Forwarded-For` from the tunnel in front of it) for
+rate limiting. Don't also publish its port directly to the internet.
 
 ### Connecting Claude
 
