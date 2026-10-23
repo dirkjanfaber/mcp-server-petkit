@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/dirkjanfaber/mcp-server-petkit/actions/workflows/ci.yml/badge.svg)](https://github.com/dirkjanfaber/mcp-server-petkit/actions/workflows/ci.yml)
 
-MCP (Model Context Protocol) server for the [PetKit](https://www.petkit.com) cloud API. Exposes feeder status and control for the **Fresh Element Solo** (device type `D4`) as MCP tools.
+MCP (Model Context Protocol) server for the [PetKit](https://www.petkit.com) cloud API. Exposes status and control for the **D4-family feeders** (`D4`, `D4H`, `D4S`, `D4SH` - Fresh Element Solo and its siblings) and read-only status for the **BLE water fountains** (`W4`, `W5`, `CTW2`, `CTW3`) as MCP tools.
 
 > **Disclaimer:** This project is not affiliated with, endorsed by, or in any way associated with PetKit. It is an independent, community-developed integration created by a happy user of their hardware and software. PetKit and Fresh Element Solo are trademarks of their respective owner. Use of this package is at your own risk. The underlying API is unofficial and reverse-engineered by the community - it may change or break without notice.
 
@@ -15,10 +15,28 @@ MCP (Model Context Protocol) server for the [PetKit](https://www.petkit.com) clo
 | `update_feeder_setting` | Change a numeric setting (child lock, indicator light, dispense tone, shortage alarm, ...) |
 | `skip_scheduled_feed` | Skip one of today's scheduled meals (`d4/removeDailyFeed`), leaving the recurring plan untouched |
 | `restore_scheduled_feed` | Undo a skip for today (`d4/restoreDailyFeed`) |
+| `list_litter_boxes` | List litter boxes with warnings, sand level and waste bag usage (read-only) |
+| `list_water_fountains` | List BLE water fountains with power/battery/filter/warning state and today's pump run time (read-only) |
 
 ### Feed amounts
 
-The D4 only accepts these five portion sizes: `10`, `20`, `30`, `40`, `50`.
+`feed_now` takes **portions** - one portion is what the app calls 一份. The raw amount the
+cloud expects per portion differs by model, so it is never exposed:
+
+| Feeder | Raw amount per portion | Portions per call |
+|---|---|---|
+| `D4` / `D4H` | 10 (cloud accepts 10/20/30/40/50) | 1-5 |
+| `D4S` / `D4SH` | 1 (cloud accepts 1-10) | 1-10 |
+
+Verified live on 2026-10-23: sending 10 raw units to a D4SH dispenses **ten** portions, not
+one - the two families do not share a unit, and an earlier version of this server got that
+wrong.
+
+Dual hopper feeders (`D4S`, `D4SH`) split a meal over two hoppers, so `feed_now` also needs
+a `hopper` of `1` or `2` and always sends `amount1`/`amount2` (the unused hopper at 0). An
+`amount`-only request is accepted by the cloud but dispenses nothing. Their plan totals are
+reported per hopper summed, the food level as the emptier hopper, and dual hopper meals as
+the total of both hoppers.
 
 ### Feed totals are per device, not per cat
 
@@ -36,6 +54,43 @@ The D4 only accepts these five portion sizes: `10`, `20`, `30`, `40`, `50`.
 | `foodWarn` | Shortage alarm (0/1) |
 
 Other numeric keys the device reports via `list_feeders` may also work but are unconfirmed.
+
+### Device faults
+
+A fault shows up as `error` and a `faults` code list on the feeder (`null` / `[]` when
+healthy). PetKit only sends these four flat `state` fields while something is wrong:
+
+| Field | Example |
+|---|---|
+| `errorCode` | `blk_d` |
+| `errorMsg` | `Food has piled up at the dispenser chute. Please clean it.` |
+| `errorLevel` | `2` |
+| `errorDetail` | longer advice (e.g. feed more meals with less food) |
+
+A jammed feeder still *accepts* `feed_now` - it just piles the food up at the chute - so
+`feed_now` reads the device state first and refuses with the device's own message while a
+fault is reported. The pre-check is best effort: if that read fails, the dispense is not
+blocked by it.
+
+Litter boxes and fountains use different fields - booleans (`boxFull`, `sandLack`,
+`filterWarning`, `lackWarning`, ...) instead of an error envelope, and no message text. See
+[docs/device-faults.md](docs/device-faults.md) for the full list of what each family reports
+and what is deliberately left unmapped.
+
+## Water fountains
+
+`list_water_fountains` covers the **BLE** fountains (`W4`, `W5`, `CTW2`, `CTW3`) from
+`<type>/deviceData`: power/run/suspend state, battery, filter life and the filter / low
+water / breakdown / low battery warnings, today's pump run time in minutes, do-not-disturb
+and lamp ring settings.
+
+It is **read-only on purpose**: PetKit only accepts fountain commands over the BLE relay
+(`ble/connect` + `ble/controlDevice` with hex frames), which needs a BLE client in range of
+the fountain - a server-side MCP client cannot do that. W7H is Wi-Fi and could be
+controlled from the cloud, but it is not implemented. See
+[docs/water-fountain-api.md](docs/water-fountain-api.md) for the endpoint analysis, the
+live payload and the caveats (`-1` sentinels, filter percentage semantics, shared devices
+appearing in several groups).
 
 ## Configuration
 

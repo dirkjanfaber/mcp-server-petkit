@@ -218,7 +218,7 @@ describe('PetkitCloudAPI', () => {
         desc: 'Next Dispense: 17:30',
         settings: { manualLock: 0, lightMode: 1, feedSound: 1, foodWarn: 0 },
         state: {
-          food: 1, batteryPower: 0, batteryStatus: 0, desiccantLeftDays: 27, feeding: 0,
+          food: 1, error: null, batteryPower: 0, batteryStatus: 0, desiccantLeftDays: 27, feeding: 0,
           feedState: {
             realAmountTotal: 50, planAmountTotal: 60, addAmountTotal: 10, planRealAmountTotal: 40,
             times: 3, feedTimes: { '24300': 1, '43200': 1, '63000': 3, '82800': 3 },
@@ -330,18 +330,20 @@ describe('PetkitCloudAPI', () => {
   // --- feedNow ---
 
   describe('feedNow()', () => {
-    it('rejects an amount outside the D4\'s allowed portions without making a network call', async () => {
+    it('rejects a portion count the model cannot express without making a network call', async () => {
       mockAuthFlow();
 
-      await expect(api.feedNow(100, 15)).rejects.toThrow(/10, 20, 30, 40, 50/);
+      // The D4 takes 10/20/30/40/50 raw units, i.e. at most 5 portions.
+      await expect(api.feedNow(100, 6)).rejects.toThrow(/only accepts these amounts/);
+      await expect(api.feedNow(100, 0)).rejects.toThrow(/between 1 and 10/);
       expect(mock.history.post.filter(req => req.url?.includes('saveDailyFeed'))).toHaveLength(0);
     });
 
-    it('dispenses a valid amount', async () => {
+    it('turns portions into the raw amount the D4 expects', async () => {
       mockAuthFlow();
       mock.onPost(`${US_BASE_URL}d4/saveDailyFeed`).reply(200, { result: {} });
 
-      await api.feedNow(100, 20);
+      await api.feedNow(100, 2);
 
       const feedCall = mock.history.post.find(req => req.url === `${US_BASE_URL}d4/saveDailyFeed`);
       const body = new URLSearchParams(feedCall!.data as string);
@@ -425,7 +427,7 @@ describe('PetkitCloudAPI', () => {
         return [200, { result: {} }];
       });
 
-      await api.feedNow(100, 10);
+      await api.feedNow(100, 1);
 
       expect(feedAttempts).toBe(2);
       const loginCalls = mock.history.post.filter(req => req.url === `${US_BASE_URL}user/login`);
@@ -443,7 +445,7 @@ describe('PetkitCloudAPI', () => {
         return [200, { result: {} }];
       });
 
-      await api.feedNow(100, 10);
+      await api.feedNow(100, 1);
 
       expect(feedAttempts).toBe(3);
     });
@@ -473,7 +475,7 @@ describe('PetkitCloudAPI', () => {
       });
 
       const start = Date.now();
-      await delayedApi.feedNow(100, 10);
+      await delayedApi.feedNow(100, 1);
 
       expect(Date.now() - start).toBeGreaterThanOrEqual(15);
       expect(feedAttempts).toBe(2);
@@ -483,7 +485,7 @@ describe('PetkitCloudAPI', () => {
       mockAuthFlow();
       mock.onPost(`${US_BASE_URL}d4/saveDailyFeed`).networkError();
 
-      await expect(api.feedNow(100, 10)).rejects.toThrow();
+      await expect(api.feedNow(100, 1)).rejects.toThrow();
 
       const feedCalls = mock.history.post.filter(req => req.url === `${US_BASE_URL}d4/saveDailyFeed`);
       // 1 initial attempt + 3 configured retryDelays
