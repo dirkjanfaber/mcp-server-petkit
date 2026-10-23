@@ -12,7 +12,7 @@ function makeFeeder(overrides: Partial<Feeder> = {}): Feeder {
     desc: 'Next Dispense: 17:30',
     settings: { manualLock: 0, lightMode: 1, feedSound: 1, foodWarn: 0 },
     state: {
-      food: 1, batteryPower: 0, batteryStatus: 0, desiccantLeftDays: 27, feeding: 0,
+      food: 1, error: null, batteryPower: 0, batteryStatus: 0, desiccantLeftDays: 27, feeding: 0,
       feedState: {
         realAmountTotal: 50, planAmountTotal: 60, addAmountTotal: 10, planRealAmountTotal: 40,
         times: 3, feedTimes: { '24300': 1, '43200': 1, '63000': 3, '82800': 3 },
@@ -31,6 +31,8 @@ function makeApi(overrides: Partial<PetkitBackend> = {}): PetkitBackend {
   return {
     authenticate: jest.fn(),
     getFeeders: jest.fn().mockResolvedValue([]),
+    getLitterBoxes: jest.fn().mockResolvedValue([]),
+    getWaterFountains: jest.fn().mockResolvedValue([]),
     feedNow: jest.fn().mockResolvedValue(undefined),
     updateFeederSetting: jest.fn().mockResolvedValue(undefined),
     skipScheduledFeed: jest.fn().mockResolvedValue(undefined),
@@ -121,19 +123,32 @@ describe('list_feeders', () => {
 describe('feed_now', () => {
   it('calls feedNow with validated args', async () => {
     const api = makeApi();
-    await handleToolCall('feed_now', { deviceId: 100, amount: 20 }, api);
-    expect(api.feedNow).toHaveBeenCalledWith(100, 20);
+    await handleToolCall('feed_now', { deviceId: 100, portions: 2 }, api);
+    expect(api.feedNow).toHaveBeenCalledWith(100, 2, undefined);
   });
 
-  it('rejects an amount outside the D4\'s allowed portions', async () => {
+  it('rejects a portion count outside 1..10', async () => {
     const api = makeApi();
-    await expect(handleToolCall('feed_now', { deviceId: 100, amount: 15 }, api)).rejects.toThrow();
+    await expect(handleToolCall('feed_now', { deviceId: 100, portions: 11 }, api)).rejects.toThrow();
+    await expect(handleToolCall('feed_now', { deviceId: 100, portions: 0 }, api)).rejects.toThrow();
     expect(api.feedNow).not.toHaveBeenCalled();
   });
 
   it('rejects a missing deviceId', async () => {
     const api = makeApi();
-    await expect(handleToolCall('feed_now', { amount: 20 }, api)).rejects.toThrow();
+    await expect(handleToolCall('feed_now', { portions: 2 }, api)).rejects.toThrow();
+  });
+
+  it('passes the hopper through for a dual hopper feeder', async () => {
+    const api = makeApi();
+    await handleToolCall('feed_now', { deviceId: 100, portions: 1, hopper: 1 }, api);
+    expect(api.feedNow).toHaveBeenCalledWith(100, 1, 1);
+  });
+
+  it('rejects a hopper outside 1/2', async () => {
+    const api = makeApi();
+    await expect(handleToolCall('feed_now', { deviceId: 100, portions: 1, hopper: 3 }, api)).rejects.toThrow();
+    expect(api.feedNow).not.toHaveBeenCalled();
   });
 });
 

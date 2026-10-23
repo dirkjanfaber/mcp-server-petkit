@@ -1,6 +1,17 @@
 import axios, { AxiosInstance } from 'axios';
 import { createHash } from 'crypto';
-import { FeedPlanDay, Feeder, PetkitBackend, PetkitCredentials } from '../types/petkit.js';
+import {
+  FeedPlanDay,
+  Feeder,
+  FeederError,
+  FeederType,
+  LitterBox,
+  LitterBoxType,
+  PetkitBackend,
+  PetkitCredentials,
+  WaterFountain,
+  WaterFountainType,
+} from '../types/petkit.js';
 
 const REGION_SERVER_URL = 'https://passport.petkt.com/6/account/regionservers';
 // PetKit's app hardcodes China to this base URL rather than trusting the gateway
@@ -46,8 +57,56 @@ export function timezoneOffsetHours(timeZone: string): string {
 const SESSION_EXPIRED_CODE = 5;
 const SERVER_BUSY_CODES = [1, 99];
 
-// D4 (Fresh Element Solo) only accepts these portion sizes.
+// D4 (Fresh Element Solo) only accepts these amounts.
 const FEEDER_AMOUNTS = [10, 20, 30, 40, 50];
+// How many raw amount units one "portion" (一份, what the app shows) is worth per model.
+// Confirmed live on 2026-10-23: a D4H accepts 10/20/... for 1/2/... portions, while a
+// D4SH takes 1..10 directly as portions - sending 10 there dispenses ten 份, not one.
+const PORTION_UNITS: Record<FeederType, number> = { d4: 10, d4h: 10, d4s: 1, d4sh: 1 };
+const MAX_PORTIONS = 10;
+
+// Feeders that answer <type>/device_detail with the same payload the d4 family does.
+const FEEDER_TYPES: FeederType[] = ['d4', 'd4s', 'd4h', 'd4sh'];
+// Dual hopper feeders split a meal over two hoppers (amount1/amount2) and need a
+// different manual-feed payload, which is not implemented yet.
+const DUAL_HOPPER_TYPES: FeederType[] = ['d4s', 'd4sh'];
+// BLE water fountains: the cloud can read them from <type>/deviceData but every
+// control command goes over the BLE relay, so this client is read-only for them.
+const FOUNTAIN_TYPES: WaterFountainType[] = ['ctw3', 'w4', 'w5', 'ctw2'];
+// Litter boxes answer <type>/device_detail like the feeders, with their own state shape.
+const LITTER_TYPES: LitterBoxType[] = ['t3', 't4', 't5', 't6', 't7'];
+
+// Faults come back as flat state fields (errorCode/errorMsg/errorLevel/errorDetail) and
+// only when something is wrong - a healthy feeder omits them entirely.
+function feederError(state: any): FeederError | null {
+  if (!state?.errorCode) {
+    return null;
+  }
+  const error: FeederError = {
+    code: String(state.errorCode),
+    message: String(state.errorMsg ?? ''),
+    level: Number(state.errorLevel ?? 0),
+  };
+  if (state.errorDetail) {
+    error.detail = String(state.errorDetail);
+  }
+  return error;
+}
+
+function asFeederType(type: string): FeederType | null {
+  const lower = type.toLowerCase();
+  return (FEEDER_TYPES as string[]).includes(lower) ? (lower as FeederType) : null;
+}
+
+function asFountainType(type: string): WaterFountainType | null {
+  const lower = type.toLowerCase();
+  return (FOUNTAIN_TYPES as string[]).includes(lower) ? (lower as WaterFountainType) : null;
+}
+
+function asLitterType(type: string): LitterBoxType | null {
+  const lower = type.toLowerCase();
+  return (LITTER_TYPES as string[]).includes(lower) ? (lower as LitterBoxType) : null;
+}
 const SECONDS_PER_DAY = 86400;
 
 export class PetkitApiError extends Error {
@@ -95,6 +154,9 @@ export class PetkitCloudAPI implements PetkitBackend {
   private tokenExpiresAt = 0;
   private baseUrl: string | null = null;
   private groupIds: number[] = [];
+  // Device type per id, learned while listing, so the control endpoints can be
+  // addressed as <type>/<endpoint> instead of assuming every feeder is a d4.
+  private deviceTypes = new Map<number, FeederType>();
 
   constructor(credentials: PetkitCredentials, options: PetkitAPIOptions = {}) {
     this.credentials = credentials;
@@ -215,77 +277,224 @@ export class PetkitCloudAPI implements PetkitBackend {
     await this.authenticate();
     return this.withRetry(async () => {
       const feeders: Feeder[] = [];
-      for (const groupId of this.groupIds) {
-        const roster = await this.post(`${this.baseUrl}discovery/device_roster_v2`, {
-          day: localDayCompact(this.timezone()),
-          groupId: String(groupId),
-        }, this.sessionHeaders());
-
-        for (const device of roster.result?.devices ?? []) {
-          if (device.type !== 'D4') {
-            continue;
-          }
-          const detail = await this.post(`${this.baseUrl}d4/device_detail`, {
-            id: String(device.id),
-          }, this.sessionHeaders());
-          const d = detail.result;
-          const feedPlan: FeedPlanDay[] = (d.multiFeedItem?.feedDailyList ?? []).map((day: any) => ({
-            repeats: day.repeats,
-            suspended: day.suspended,
-            meals: (day.items ?? []).map((item: any) => ({
-              time: item.time,
-              amount: item.amount,
-              name: item.name,
-            })),
-          }));
-          const today = feedPlan.find(day => day.repeats === localWeekdayRepeats(this.timezone(), this.now()));
-          feeders.push({
-            id: d.id,
-            type: 'd4',
-            name: d.name,
-            serialNumber: d.sn,
-            firmware: d.firmware,
-            desc: d.desc,
-            settings: {
-              manualLock: d.settings.manualLock,
-              lightMode: d.settings.lightMode,
-              feedSound: d.settings.feedSound,
-              foodWarn: d.settings.foodWarn,
-            },
-            state: {
-              food: d.state.food,
-              batteryPower: d.state.batteryPower,
-              batteryStatus: d.state.batteryStatus,
-              desiccantLeftDays: d.state.desiccantLeftDays,
-              feeding: d.state.feeding,
-              feedState: {
-                realAmountTotal: d.state.feedState.realAmountTotal,
-                planAmountTotal: d.state.feedState.planAmountTotal,
-                addAmountTotal: d.state.feedState.addAmountTotal,
-                planRealAmountTotal: d.state.feedState.planRealAmountTotal,
-                times: d.state.feedState.times,
-                feedTimes: d.state.feedState.feedTimes,
-              },
-            },
-            feedPlan,
-            // A suspended day dispenses nothing, whatever meals it still lists.
-            feedPlanToday: today && today.suspended !== 1 ? today.meals : [],
-          });
+      for (const device of await this.rosterDevices()) {
+        const type = asFeederType(device.type);
+        if (!type) {
+          continue;
         }
+        const detail = await this.post(`${this.baseUrl}${type}/device_detail`, {
+          id: String(device.id),
+        }, this.sessionHeaders());
+        const d = detail.result;
+        this.deviceTypes.set(d.id, type);
+        const feedPlan: FeedPlanDay[] = (d.multiFeedItem?.feedDailyList ?? []).map((day: any) => ({
+          repeats: day.repeats,
+          suspended: day.suspended,
+          meals: (day.items ?? []).map((item: any) => ({
+            time: item.time,
+            // Dual hopper feeders split one meal over two hoppers as amount1/amount2
+            // and never send amount - report the total so the plan stays readable.
+            amount: item.amount ?? (item.amount1 ?? 0) + (item.amount2 ?? 0),
+            name: item.name,
+          })),
+        }));
+        const today = feedPlan.find(day => day.repeats === localWeekdayRepeats(this.timezone(), this.now()));
+        const feedState = d.state.feedState ?? {};
+        // D4S/D4SH report one total per hopper (realAmountTotal1/2, ...).
+        const hopperTotal = (key: string): number =>
+          (feedState[`${key}1`] ?? 0) + (feedState[`${key}2`] ?? 0);
+        feeders.push({
+          id: d.id,
+          type,
+          name: d.name,
+          serialNumber: d.sn,
+          firmware: d.firmware,
+          desc: d.desc,
+          settings: {
+            manualLock: d.settings.manualLock,
+            lightMode: d.settings.lightMode,
+            feedSound: d.settings.feedSound,
+            foodWarn: d.settings.foodWarn,
+          },
+          state: {
+            // Dual hopper feeders only report food1/food2; the emptier hopper is the
+            // one that runs out first, so report the lower indicator.
+            food: d.state.food ?? Math.min(d.state.food1 ?? 1, d.state.food2 ?? 1),
+            error: feederError(d.state),
+            batteryPower: d.state.batteryPower,
+            batteryStatus: d.state.batteryStatus,
+            desiccantLeftDays: d.state.desiccantLeftDays,
+            feeding: d.state.feeding ?? 0,
+            feedState: {
+              realAmountTotal: feedState.realAmountTotal ?? hopperTotal('realAmountTotal'),
+              planAmountTotal: feedState.planAmountTotal ?? hopperTotal('planAmountTotal'),
+              addAmountTotal: feedState.addAmountTotal ?? hopperTotal('addAmountTotal'),
+              planRealAmountTotal: feedState.planRealAmountTotal ?? hopperTotal('planRealAmountTotal'),
+              times: feedState.times ?? 0,
+              feedTimes: feedState.feedTimes ?? {},
+            },
+          },
+          feedPlan,
+          // A suspended day dispenses nothing, whatever meals it still lists.
+          feedPlanToday: today && today.suspended !== 1 ? today.meals : [],
+        });
       }
       return feeders;
     });
   }
 
-  async feedNow(deviceId: number, amount: number): Promise<void> {
-    if (!FEEDER_AMOUNTS.includes(amount)) {
-      throw new Error(`Invalid feed amount ${amount}. Fresh Element Solo only accepts: ${FEEDER_AMOUNTS.join(', ')}`);
+  // The device roster is per family group, and a device shared with another group is
+  // listed by both - dedupe by id so each device is reported once.
+  private async rosterDevices(): Promise<{ id: number; type: string }[]> {
+    const devices = new Map<number, string>();
+    for (const groupId of this.groupIds) {
+      const roster = await this.post(`${this.baseUrl}discovery/device_roster_v2`, {
+        day: localDayCompact(this.timezone()),
+        groupId: String(groupId),
+      }, this.sessionHeaders());
+
+      for (const device of roster.result?.devices ?? []) {
+        if (typeof device?.id === 'number' && typeof device?.type === 'string') {
+          devices.set(device.id, device.type);
+        }
+      }
+    }
+    return [...devices].map(([id, type]) => ({ id, type }));
+  }
+
+  // BLE water fountains expose a live snapshot and nothing else - no plan, no
+  // writable settings from the cloud. See docs/water-fountain-api.md.
+  async getWaterFountains(): Promise<WaterFountain[]> {
+    await this.authenticate();
+    return this.withRetry(async () => {
+      const fountains: WaterFountain[] = [];
+      for (const device of await this.rosterDevices()) {
+        const type = asFountainType(device.type);
+        if (!type) {
+          continue;
+        }
+        const detail = await this.post(`${this.baseUrl}${type}/deviceData`, {
+          id: String(device.id),
+        }, this.sessionHeaders());
+        const d = detail.result;
+        const status = d.status ?? {};
+        const settings = d.settings ?? {};
+        const electricity = d.electricity ?? {};
+        fountains.push({
+          id: d.id,
+          type,
+          name: d.name,
+          serialNumber: d.sn,
+          firmware: d.firmware,
+          settings: {
+            lampRingSwitch: settings.lampRingSwitch ?? null,
+            lampRingBrightness: settings.lampRingBrightness ?? null,
+            noDisturbingSwitch: settings.noDisturbingSwitch ?? null,
+          },
+          state: {
+            powerStatus: status.powerStatus ?? null,
+            runStatus: status.runStatus ?? null,
+            suspendStatus: status.suspendStatus ?? null,
+            batteryPercent: electricity.batteryPercent ?? null,
+            supplyVoltage: electricity.supplyVoltage ?? null,
+            // -1 on CTW3 for the water metrics; only the pump time is meaningful.
+            filterPercent: d.filterPercent ?? null,
+            filterExpectedDays: d.filterExpectedDays ?? null,
+            pumpRunSecondsToday: d.todayPumpRunTime ?? null,
+            filterWarning: d.filterWarning ?? 0,
+            lackWarning: d.lackWarning ?? 0,
+            breakdownWarning: d.breakdownWarning ?? 0,
+            lowBattery: d.lowBattery ?? 0,
+            lastSync: d.syncTime ?? null,
+            updatedAt: d.updateAt ?? null,
+          },
+        });
+      }
+      return fountains;
+    });
+  }
+
+  // Litter boxes report consumables and warnings but nothing writable here, and the
+  // integer component states (sandStatus, packState, dumpState, ...) have no published
+  // meaning, so they are deliberately not mapped - see docs/device-faults.md.
+  async getLitterBoxes(): Promise<LitterBox[]> {
+    await this.authenticate();
+    return this.withRetry(async () => {
+      const boxes: LitterBox[] = [];
+      for (const device of await this.rosterDevices()) {
+        const type = asLitterType(device.type);
+        if (!type) {
+          continue;
+        }
+        const detail = await this.post(`${this.baseUrl}${type}/device_detail`, {
+          id: String(device.id),
+        }, this.sessionHeaders());
+        const d = detail.result;
+        const s = d.state ?? {};
+        const flag = (value: unknown): boolean => value === true || value === 1;
+        boxes.push({
+          id: d.id,
+          type,
+          name: d.name,
+          serialNumber: d.sn,
+          firmware: d.firmware,
+          state: {
+            boxFull: flag(s.boxFull),
+            sandLack: flag(s.sandLack),
+            liquidLack: flag(s.liquidLack),
+            liquidEmpty: flag(s.liquidEmpty),
+            lowPower: flag(s.lowPower),
+            petError: flag(s.petError),
+            frequentRestroom: s.frequentRestroom ?? 0,
+            sandPercent: s.sandPercent ?? null,
+            sandWeightGrams: s.sandWeight ?? null,
+            purificationLeftDays: s.purificationLeftDays ?? null,
+            packageUsed: d.packageUsedCount ?? null,
+            packageTotal: d.packageTotalCount ?? null,
+            wifiRssi: s.wifi?.rsq ?? null,
+            error: feederError(s),
+          },
+        });
+      }
+      return boxes;
+    });
+  }
+
+  // Control endpoints are addressed as <type>/<endpoint>; the type is remembered from
+  // the last listing and falls back to d4 for a device that was never listed.
+  private typePrefix(deviceId: number): FeederType {
+    return this.deviceTypes.get(deviceId) ?? 'd4';
+  }
+
+  async feedNow(deviceId: number, portions: number, hopper?: 1 | 2): Promise<void> {
+    if (!Number.isInteger(portions) || portions < 1 || portions > MAX_PORTIONS) {
+      throw new Error(`Invalid portion count ${portions}: expected a whole number of portions between 1 and ${MAX_PORTIONS}`);
     }
 
     await this.authenticate();
+    const type = this.typePrefix(deviceId);
+    const dual = DUAL_HOPPER_TYPES.includes(type);
+    if (dual && hopper !== 1 && hopper !== 2) {
+      throw new Error(`${type.toUpperCase()} has two hoppers: pass hopper 1 or 2 to choose which one dispenses`);
+    }
+
+    // Portions are what the app shows; the cloud amount is model specific.
+    const amount = portions * PORTION_UNITS[type];
+    if (!dual && !FEEDER_AMOUNTS.includes(amount)) {
+      throw new Error(`${type.toUpperCase()} only accepts these amounts: ${FEEDER_AMOUNTS.join(', ')}, so at most ${FEEDER_AMOUNTS[FEEDER_AMOUNTS.length - 1] / PORTION_UNITS[type]} portions`);
+    }
+
+    // Single hopper feeders take amount. Dual hopper feeders take amount1/amount2 and the
+    // cloud echoes both back, so always send the pair with the unused hopper at 0 - an
+    // amount-only request is accepted but dispenses nothing (confirmed live 2026-10-23).
+    const amounts: Record<string, string> = dual
+      ? { amount1: hopper === 1 ? String(amount) : '0', amount2: hopper === 2 ? String(amount) : '0' }
+      : { amount: String(amount) };
+
     return this.withRetry(async () => {
-      await this.post(`${this.baseUrl}d4/saveDailyFeed`, {
-        amount: String(amount),
+      await this.assertNoFault(deviceId, type);
+      await this.post(`${this.baseUrl}${type}/saveDailyFeed`, {
+        ...amounts,
         day: localDayCompact(this.timezone()),
         deviceId: String(deviceId),
         time: '-1',
@@ -335,7 +544,7 @@ export class PetkitCloudAPI implements PetkitBackend {
 
     await this.authenticate();
     return this.withRetry(async () => {
-      await this.post(`${this.baseUrl}d4/${endpoint}`, {
+      await this.post(`${this.baseUrl}${this.typePrefix(deviceId)}/${endpoint}`, {
         day: localDayCompact(this.timezone()),
         deviceId: String(deviceId),
         id: `s${feedTime}`,
@@ -343,10 +552,30 @@ export class PetkitCloudAPI implements PetkitBackend {
     });
   }
 
+  // A jammed feeder still accepts a dispense, it just piles the food up at the chute, so
+  // check for a reported fault first. The check is best effort: if the detail call itself
+  // fails we let the dispense through rather than blocking on an unrelated error.
+  private async assertNoFault(deviceId: number, type: FeederType): Promise<void> {
+    let state: any;
+    try {
+      const detail = await this.post(`${this.baseUrl}${type}/device_detail`, {
+        id: String(deviceId),
+      }, this.sessionHeaders());
+      state = detail.result?.state;
+    } catch {
+      return;
+    }
+
+    const error = feederError(state);
+    if (error) {
+      throw new Error(`Refusing to dispense: feeder ${deviceId} reports ${error.code} (level ${error.level}) - ${error.message}`);
+    }
+  }
+
   async updateFeederSetting(deviceId: number, key: string, value: number): Promise<void> {
     await this.authenticate();
     return this.withRetry(async () => {
-      await this.post(`${this.baseUrl}d4/updateSettings`, {
+      await this.post(`${this.baseUrl}${this.typePrefix(deviceId)}/updateSettings`, {
         id: String(deviceId),
         kv: JSON.stringify({ [key]: value }),
       }, this.sessionHeaders());
