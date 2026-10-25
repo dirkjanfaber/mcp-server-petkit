@@ -80,6 +80,27 @@ const MOCK_FEEDER_DETAIL = {
   },
 };
 
+// Shape confirmed live against d4/dailyFeeds on 2026-10-25, the morning after the
+// switch to winter time - the day this feeder's clock was still an hour ahead.
+// `time` is when the feeder's own clock said the dispense was due (scheduled, src 1)
+// or when it received a manual feed (src 4); `completedAt` is the real moment, in UTC.
+const MOCK_DAILY_FEEDS = {
+  result: {
+    feed: [{
+      day: 20261025,
+      items: [
+        { id: 's24300', time: 24300, amount: 20, name: 'Breakfast', src: 1, status: 0, isExecuted: 1,
+          state: { realAmount: 20, completedAt: '2026-10-25T04:45:52.000+0000', errCode: 0, result: 0 } },
+        { id: 'm27985', time: 27985, amount: 10, src: 4, status: 0, isExecuted: 1,
+          state: { realAmount: 10, completedAt: '2026-10-25T05:46:26.000+0000', errCode: 0, result: 0 } },
+        { id: 's63000', time: 63000, amount: 10, name: 'Dinner', src: 1, status: 0, isExecuted: 1 },
+      ],
+    }],
+  },
+};
+
+const NO_DAILY_FEEDS = { result: { feed: [] } };
+
 // A Monday - repeats 2 in the fixture plan, which is suspended.
 const MONDAY_NOON_UTC = new Date('2026-09-28T12:00:00Z');
 
@@ -206,6 +227,7 @@ describe('PetkitCloudAPI', () => {
       mockAuthFlow();
       mock.onPost(`${US_BASE_URL}discovery/device_roster_v2`).reply(200, MOCK_DEVICE_ROSTER);
       mock.onPost(`${US_BASE_URL}d4/device_detail`).reply(200, MOCK_FEEDER_DETAIL);
+      mock.onPost(`${US_BASE_URL}d4/dailyFeeds`).reply(200, NO_DAILY_FEEDS);
 
       const feeders = await api.getFeeders();
 
@@ -241,6 +263,8 @@ describe('PetkitCloudAPI', () => {
           { repeats: 3, suspended: 0, meals: [] },
         ],
         feedPlanToday: [],
+        dispenseLog: [],
+        clockOffsetMinutes: null,
       }]);
       const detailCall = mock.history.post.find(req => req.url === `${US_BASE_URL}d4/device_detail`);
       expect(new URLSearchParams(detailCall!.data as string).get('id')).toBe('100');
@@ -251,6 +275,7 @@ describe('PetkitCloudAPI', () => {
       mock.onPost(`${US_BASE_URL}discovery/device_roster_v2`).reply(200, MOCK_DEVICE_ROSTER);
       const { multiFeedItem, ...detailWithoutPlan } = MOCK_FEEDER_DETAIL.result;
       mock.onPost(`${US_BASE_URL}d4/device_detail`).reply(200, { result: detailWithoutPlan });
+      mock.onPost(`${US_BASE_URL}d4/dailyFeeds`).reply(200, NO_DAILY_FEEDS);
 
       const feeders = await api.getFeeders();
 
@@ -263,6 +288,7 @@ describe('PetkitCloudAPI', () => {
       mockAuthFlow();
       mock.onPost(`${US_BASE_URL}discovery/device_roster_v2`).reply(200, MOCK_DEVICE_ROSTER);
       mock.onPost(`${US_BASE_URL}d4/device_detail`).reply(200, MOCK_FEEDER_DETAIL);
+      mock.onPost(`${US_BASE_URL}d4/dailyFeeds`).reply(200, NO_DAILY_FEEDS);
 
       const feeders = await api.getFeeders();
 
@@ -281,6 +307,7 @@ describe('PetkitCloudAPI', () => {
       mockAuthFlow();
       mock.onPost(`${US_BASE_URL}discovery/device_roster_v2`).reply(200, MOCK_DEVICE_ROSTER);
       mock.onPost(`${US_BASE_URL}d4/device_detail`).reply(200, MOCK_FEEDER_DETAIL);
+      mock.onPost(`${US_BASE_URL}d4/dailyFeeds`).reply(200, NO_DAILY_FEEDS);
 
       const feeders = await api.getFeeders();
 
@@ -288,6 +315,137 @@ describe('PetkitCloudAPI', () => {
         { time: 24300, amount: 20, name: 'Breakfast' },
         { time: 63000, amount: 10, name: 'Dinner' },
       ]);
+    });
+    describe("today's dispense log", () => {
+      // 13:09 in Amsterdam (CET) on the morning-after day the fixture was captured.
+      const AFTER_DST_SWITCH = new Date('2026-10-25T12:09:00Z');
+
+      function amsterdamApi(now: Date = AFTER_DST_SWITCH) {
+        return new PetkitCloudAPI(
+          { ...credentials(), timezone: 'Europe/Amsterdam' },
+          { retryDelays: [0, 0, 0], now: () => now },
+        );
+      }
+
+      function mockFeeder(dailyFeeds: unknown) {
+        mockAuthFlow();
+        mock.onPost(`${US_BASE_URL}discovery/device_roster_v2`).reply(200, MOCK_DEVICE_ROSTER);
+        mock.onPost(`${US_BASE_URL}d4/device_detail`).reply(200, MOCK_FEEDER_DETAIL);
+        mock.onPost(`${US_BASE_URL}d4/dailyFeeds`).reply(200, dailyFeeds);
+      }
+
+      function dailyFeedsWith(items: unknown[]) {
+        return { result: { feed: [{ day: 20261025, items }] } };
+      }
+
+      it("asks d4/dailyFeeds for the feeder's records of today, in the configured timezone", async () => {
+        api = amsterdamApi();
+        mockFeeder(MOCK_DAILY_FEEDS);
+
+        await api.getFeeders();
+
+        const call = mock.history.post.find(req => req.url === `${US_BASE_URL}d4/dailyFeeds`);
+        const params = new URLSearchParams(call!.data as string);
+        expect(params.get('deviceId')).toBe('100');
+        expect(params.get('days')).toBe('20261025');
+      });
+
+      it('lists completed dispenses with the real time they happened, local and UTC', async () => {
+        api = amsterdamApi();
+        mockFeeder(MOCK_DAILY_FEEDS);
+
+        const [feeder] = await api.getFeeders();
+
+        expect(feeder.dispenseLog).toEqual([
+          {
+            time: 24300, name: 'Breakfast', source: 'scheduled', amount: 20, dispensed: 20,
+            completedAt: '2026-10-25T04:45:52.000Z', completedAtLocal: '05:45:52',
+          },
+          {
+            time: 27985, name: null, source: 'manual', amount: 10, dispensed: 10,
+            completedAt: '2026-10-25T05:46:26.000Z', completedAtLocal: '06:46:26',
+          },
+        ]);
+      });
+
+      it("reports the feeder's clock as an hour ahead when it dispenses an hour early", async () => {
+        api = amsterdamApi();
+        mockFeeder(MOCK_DAILY_FEEDS);
+
+        const [feeder] = await api.getFeeders();
+
+        expect(feeder.clockOffsetMinutes).toBe(60);
+      });
+
+      it('reports a zero offset for a feeder that dispenses on time, despite the motor taking ~50s', async () => {
+        api = amsterdamApi();
+        mockFeeder(dailyFeedsWith([
+          { time: 24300, amount: 20, name: 'Breakfast', src: 1,
+            state: { realAmount: 20, completedAt: '2026-10-25T05:45:50.000+0000' } },
+        ]));
+
+        const [feeder] = await api.getFeeders();
+
+        expect(feeder.clockOffsetMinutes).toBe(0);
+      });
+
+      it('judges the offset by the most recent dispense, so a fixed clock reads as fixed', async () => {
+        api = amsterdamApi();
+        mockFeeder(dailyFeedsWith([
+          { time: 24300, amount: 20, name: 'Breakfast', src: 1,
+            state: { realAmount: 20, completedAt: '2026-10-25T04:45:52.000+0000' } },
+          { time: 43200, amount: 20, name: 'Lunch', src: 1,
+            state: { realAmount: 20, completedAt: '2026-10-25T11:00:51.000+0000' } },
+        ]));
+
+        const [feeder] = await api.getFeeders();
+
+        expect(feeder.clockOffsetMinutes).toBe(0);
+      });
+
+      it("measures the offset across midnight when the feeder's clock is already on the next day", async () => {
+        // The feeder says 00:15, the real local time is still 23:15 the evening before.
+        api = amsterdamApi(new Date('2026-10-25T22:30:00Z'));
+        mockFeeder(dailyFeedsWith([
+          { time: 900, amount: 10, name: 'Midnight', src: 1,
+            state: { realAmount: 10, completedAt: '2026-10-25T22:15:40.000+0000' } },
+        ]));
+
+        const [feeder] = await api.getFeeders();
+
+        expect(feeder.clockOffsetMinutes).toBe(60);
+      });
+
+      it('marks dispenses from an unrecognised source as unknown', async () => {
+        api = amsterdamApi();
+        mockFeeder(dailyFeedsWith([
+          { time: 30000, amount: 10, src: 2,
+            state: { realAmount: 10, completedAt: '2026-10-25T07:20:30.000+0000' } },
+        ]));
+
+        const [feeder] = await api.getFeeders();
+
+        expect(feeder.dispenseLog[0].source).toBe('unknown');
+      });
+
+      it('has no offset when nothing has been dispensed yet today', async () => {
+        api = amsterdamApi();
+        mockFeeder(NO_DAILY_FEEDS);
+
+        const [feeder] = await api.getFeeders();
+
+        expect(feeder.dispenseLog).toEqual([]);
+        expect(feeder.clockOffsetMinutes).toBeNull();
+      });
+
+      it('copes with a dailyFeeds response that has no feed list at all', async () => {
+        api = amsterdamApi();
+        mockFeeder({ result: {} });
+
+        const [feeder] = await api.getFeeders();
+
+        expect(feeder.dispenseLog).toEqual([]);
+      });
     });
   });
 

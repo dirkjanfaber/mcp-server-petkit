@@ -55,7 +55,7 @@ const SCHEDULED_FEED_INPUT_SCHEMA = {
 export const TOOLS = [
   {
     name: 'list_feeders',
-    description: "List all PetKit Fresh Element Solo (D4) feeders and their live state (food/battery/desiccant status, lock/light/sound settings, today's feed totals, and today's feeding plan with each meal's portion in feedPlanToday - amounts use feed_now's units, so feeding a meal early should use that meal's amount). Feed totals are tracked per device, not per cat - if multiple cats share or steal from each other's feeders, these numbers reflect what each physical feeder dispensed, not what any one cat ate.",
+    description: "List all PetKit Fresh Element Solo (D4) feeders and their live state (food/battery/desiccant status, lock/light/sound settings, today's feed totals, today's feeding plan with each meal's portion in feedPlanToday - amounts use feed_now's units, so feeding a meal early should use that meal's amount, and dispenseLogToday: when each of today's dispenses actually happened). clockOffsetMinutes is how far the feeder's own clock runs ahead of local time, judged by its latest dispense - e.g. 60 when it missed a daylight saving switch and drops every meal an hour early; null before the first dispense of the day. Feed totals are tracked per device, not per cat - if multiple cats share or steal from each other's feeders, these numbers reflect what each physical feeder dispensed, not what any one cat ate.",
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -128,6 +128,18 @@ function summarizeFeeder(f: Feeder) {
       amount: meal.amount,
       name: meal.name,
     })),
+    // When each dispense really happened. feederClock is the time on the feeder's own
+    // clock; if it doesn't match dispensedAt, the feeder's clock is off (clockOffsetMinutes).
+    dispenseLogToday: f.dispenseLog.map(record => ({
+      feederClock: clockTime(record.time),
+      name: record.name,
+      source: record.source,
+      amount: record.amount,
+      dispensed: record.dispensed,
+      dispensedAt: record.completedAtLocal,
+      dispensedAtUtc: record.completedAt,
+    })),
+    clockOffsetMinutes: f.clockOffsetMinutes,
   };
 }
 

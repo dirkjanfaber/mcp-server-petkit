@@ -6,7 +6,7 @@ import { createHttpApp } from './http.js';
 import { PetkitCloudAPI } from './lib/petkit-api.js';
 import { createServer } from './server.js';
 
-const VERSION = '0.3.1';
+const VERSION = '0.4.0';
 
 const email = process.env.PETKIT_EMAIL ?? '';
 const password = process.env.PETKIT_PASSWORD ?? '';

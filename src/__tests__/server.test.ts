@@ -23,6 +23,8 @@ function makeFeeder(overrides: Partial<Feeder> = {}): Feeder {
       { time: 24300, amount: 20, name: 'Breakfast' },
       { time: 63000, amount: 10, name: 'Dinner' },
     ],
+    dispenseLog: [],
+    clockOffsetMinutes: null,
     ...overrides,
   };
 }
@@ -44,6 +46,47 @@ function textOf(result: { content: { type: string; text: string }[] }): string {
 }
 
 describe('list_feeders', () => {
+  it("shows when each of today's dispenses actually happened and how far off the feeder's clock is", async () => {
+    const api = makeApi({
+      getFeeders: jest.fn().mockResolvedValue([makeFeeder({
+        dispenseLog: [
+          {
+            time: 24300, name: 'Breakfast', source: 'scheduled', amount: 20, dispensed: 20,
+            completedAt: '2026-10-25T04:45:52.000Z', completedAtLocal: '05:45:52',
+          },
+          {
+            time: 27985, name: null, source: 'manual', amount: 10, dispensed: 10,
+            completedAt: '2026-10-25T05:46:26.000Z', completedAtLocal: '06:46:26',
+          },
+        ],
+        clockOffsetMinutes: 60,
+      })]),
+    });
+    const result = await handleToolCall('list_feeders', {}, api);
+    const parsed = JSON.parse(textOf(result));
+
+    expect(parsed[0].dispenseLogToday).toEqual([
+      {
+        feederClock: '06:45', name: 'Breakfast', source: 'scheduled', amount: 20, dispensed: 20,
+        dispensedAt: '05:45:52', dispensedAtUtc: '2026-10-25T04:45:52.000Z',
+      },
+      {
+        feederClock: '07:46', name: null, source: 'manual', amount: 10, dispensed: 10,
+        dispensedAt: '06:46:26', dispensedAtUtc: '2026-10-25T05:46:26.000Z',
+      },
+    ]);
+    expect(parsed[0].clockOffsetMinutes).toBe(60);
+  });
+
+  it('reports no clock offset before the first dispense of the day', async () => {
+    const api = makeApi({ getFeeders: jest.fn().mockResolvedValue([makeFeeder()]) });
+    const result = await handleToolCall('list_feeders', {}, api);
+    const parsed = JSON.parse(textOf(result));
+
+    expect(parsed[0].dispenseLogToday).toEqual([]);
+    expect(parsed[0].clockOffsetMinutes).toBeNull();
+  });
+
   it('summarizes a feeder with human-readable on/off labels', async () => {
     const api = makeApi({ getFeeders: jest.fn().mockResolvedValue([makeFeeder()]) });
     const result = await handleToolCall('list_feeders', {}, api);

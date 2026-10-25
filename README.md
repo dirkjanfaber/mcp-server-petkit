@@ -24,6 +24,8 @@ The D4 only accepts these five portion sizes: `10`, `20`, `30`, `40`, `50`.
 
 `list_feeders` also returns `feedPlanToday`: today's scheduled meals from the feeder's weekly plan (`d4/device_detail`'s `multiFeedItem`), each with its readable `time`, the `feedTime` (seconds since midnight) that `skip_scheduled_feed` takes, the portion `amount` in `feed_now`'s units, and the meal `name`.
 
+`list_feeders` also returns `dispenseLogToday` (from `d4/dailyFeeds`): every dispense that completed today, oldest first. `dispensedAt` is when it really happened in your timezone (`dispensedAtUtc` in UTC), and `feederClock` is the time the feeder's own clock showed, so the two differ when that clock is wrong. `clockOffsetMinutes` sums that up from the latest dispense, rounded to 15 minutes. For example, it's `60` for a feeder that missed the switch to winter time and drops every meal an hour early, and `null` before the first dispense of the day. PetKit has no endpoint that reads the feeder's clock directly. Power-cycling the feeder made it pick up the new time.
+
 `list_feeders`' `fedToday`/`fedTodayScheduled`/`fedTodayExtra`/`fedTodayPlanned`/`dispensesToday`/`feedTimesToday` fields reflect what each *physical feeder* dispensed - PetKit has no way to attribute a dispense to a specific cat. If your cats share or steal from each other's bowls, these numbers won't tell you what any one cat actually ate.
 
 ### Common setting keys

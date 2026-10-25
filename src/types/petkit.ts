@@ -50,6 +50,29 @@ export interface Feeder {
   // today's plan is suspended. Meals skipped for today are still listed here - see
   // feedState.feedTimes for what is still pending.
   feedPlanToday: FeedPlanMeal[];
+  // Today's completed dispenses from d4/dailyFeeds, oldest first.
+  dispenseLog: DispenseRecord[];
+  // How far the feeder's own clock is ahead of the configured timezone, judged by its
+  // most recent dispense and rounded to 15 minutes (timezone granularity) - e.g. 60
+  // for a feeder that missed the switch to winter time. null before the first
+  // dispense of the day. PetKit has no endpoint that reads the feeder's clock directly.
+  clockOffsetMinutes: number | null;
+}
+
+export interface DispenseRecord {
+  // Seconds since midnight on the feeder's own clock: when a scheduled meal was due,
+  // or when a manual feed arrived. Compare with completedAtLocal to spot a wrong clock.
+  time: number;
+  // The meal's name for scheduled dispenses; manual feeds have none.
+  name: string | null;
+  // From the record's `src`: 1 = feeding plan, 4 = manual feed (app or API).
+  source: 'scheduled' | 'manual' | 'unknown';
+  amount: number;
+  // What the feeder reports it actually dropped.
+  dispensed: number;
+  // When it actually happened - ISO 8601 UTC, and HH:MM:SS in the configured timezone.
+  completedAt: string;
+  completedAtLocal: string;
 }
 
 // `repeats` is the weekday this day's plan applies to: 1 = Sunday ... 7 = Saturday.

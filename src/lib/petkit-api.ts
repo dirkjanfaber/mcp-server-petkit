@@ -1,6 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
 import { createHash } from 'crypto';
-import { FeedPlanDay, Feeder, PetkitBackend, PetkitCredentials } from '../types/petkit.js';
+import { DispenseRecord, FeedPlanDay, Feeder, PetkitBackend, PetkitCredentials } from '../types/petkit.js';
 
 const REGION_SERVER_URL = 'https://passport.petkt.com/6/account/regionservers';
 // PetKit's app hardcodes China to this base URL rather than trusting the gateway
@@ -76,6 +76,37 @@ function toPythonDictLiteral(obj: Record<string, string>): string {
 export function localDayCompact(timeZone: string, now: Date = new Date()): string {
   // en-CA formats dates as YYYY-MM-DD.
   return now.toLocaleDateString('en-CA', { timeZone }).replace(/-/g, '');
+}
+
+// Seconds since local midnight of `moment` in the given timezone.
+function localSecondsOfDay(moment: Date, timeZone: string): number {
+  const [hours, minutes, seconds] = moment
+    .toLocaleTimeString('en-GB', { timeZone, hour12: false })
+    .split(':')
+    .map(Number);
+  return (hours % 24) * 3600 + minutes * 60 + seconds;
+}
+
+function clockTimeWithSeconds(secondsOfDay: number): string {
+  return [Math.floor(secondsOfDay / 3600), Math.floor((secondsOfDay % 3600) / 60), secondsOfDay % 60]
+    .map(part => String(part).padStart(2, '0'))
+    .join(':');
+}
+
+const DISPENSE_SOURCES: Record<number, DispenseRecord['source']> = { 1: 'scheduled', 4: 'manual' };
+const CLOCK_OFFSET_STEP_MINUTES = 15;
+
+// The feeder dispenses when its own clock reaches `time`, so the gap between `time`
+// and the real local time of completion is how far off its clock is. The motor's
+// ~50s run disappears in the rounding to timezone granularity.
+function clockOffsetMinutes(record: DispenseRecord, timeZone: string): number {
+  const actual = localSecondsOfDay(new Date(record.completedAt), timeZone);
+  let diff = record.time - actual;
+  // Keep within +/-12h, so a clock already past midnight isn't read as 23h behind.
+  if (diff > SECONDS_PER_DAY / 2) diff -= SECONDS_PER_DAY;
+  if (diff < -SECONDS_PER_DAY / 2) diff += SECONDS_PER_DAY;
+  const offset = Math.round(diff / 60 / CLOCK_OFFSET_STEP_MINUTES) * CLOCK_OFFSET_STEP_MINUTES;
+  return offset === 0 ? 0 : offset; // never -0
 }
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -239,6 +270,8 @@ export class PetkitCloudAPI implements PetkitBackend {
             })),
           }));
           const today = feedPlan.find(day => day.repeats === localWeekdayRepeats(this.timezone(), this.now()));
+          const dispenseLog = await this.getDispenseLog(d.id);
+          const latest = dispenseLog[dispenseLog.length - 1];
           feeders.push({
             id: d.id,
             type: 'd4',
@@ -270,11 +303,36 @@ export class PetkitCloudAPI implements PetkitBackend {
             feedPlan,
             // A suspended day dispenses nothing, whatever meals it still lists.
             feedPlanToday: today && today.suspended !== 1 ? today.meals : [],
+            dispenseLog,
+            clockOffsetMinutes: latest ? clockOffsetMinutes(latest, this.timezone()) : null,
           });
         }
       }
       return feeders;
     });
+  }
+
+  private async getDispenseLog(deviceId: number): Promise<DispenseRecord[]> {
+    const response = await this.post(`${this.baseUrl}d4/dailyFeeds`, {
+      deviceId: String(deviceId),
+      days: localDayCompact(this.timezone(), this.now()),
+    }, this.sessionHeaders());
+    const items: any[] = (response.result?.feed ?? []).flatMap((day: any) => day.items ?? []);
+    return items
+      .filter(item => item.state?.completedAt)
+      .map(item => {
+        const completedAt = new Date(item.state.completedAt);
+        return {
+          time: item.time,
+          name: item.name ?? null,
+          source: DISPENSE_SOURCES[item.src] ?? 'unknown',
+          amount: item.amount,
+          dispensed: item.state.realAmount,
+          completedAt: completedAt.toISOString(),
+          completedAtLocal: clockTimeWithSeconds(localSecondsOfDay(completedAt, this.timezone())),
+        };
+      })
+      .sort((a, b) => a.completedAt.localeCompare(b.completedAt));
   }
 
   async feedNow(deviceId: number, amount: number): Promise<void> {
